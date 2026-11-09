@@ -851,8 +851,19 @@ export const handler = router({
   'GET /api/suppliers': [
     async () => {
       try {
-        const result = await db.list<Record<string, unknown>>(SUPPLIERS, { limit: 100 });
-        return json(result.items);
+        const result = await db.list<Record<string, any>>(SUPPLIERS, { limit: 100 });
+        const paymentResult = await db.list<Record<string, any>>(SUPPLIER_PAYMENTS, { limit: 200 });
+        const suppliers = await Promise.all(result.items.map(async supplier => {
+          const [wallet] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', ['supplier-' + supplier.id], { consistent: true });
+          return {
+            ...supplier,
+            rlusdBalance: Number(wallet?.balance || 0),
+            rlusdPaymentHistory: paymentResult.items
+              .filter(payment => payment.supplierId === supplier.id && payment.currency === 'RLUSD')
+              .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))),
+          };
+        }));
+        return json(suppliers);
       } catch {
         return error('Supplier list could not be loaded.', 503);
       }
