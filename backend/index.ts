@@ -1222,9 +1222,9 @@ export const handler = router({
       const country = String(input.country || '').trim();
       const amount = Number(input.amount);
       const requestId = String(input.requestId || '').trim();
-      const emailContact = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(recipient);
-      const phoneDigits = recipient.replace(/\\D/g, '');
-      const phoneContact = /^\\+?[0-9() .-]{7,20}$/.test(recipient) && phoneDigits.length >= 7 && phoneDigits.length <= 15;
+      const emailContact = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient);
+      const phoneDigits = recipient.replace(/\D/g, '');
+      const phoneContact = /^\+?[0-9() .-]{7,20}$/.test(recipient) && phoneDigits.length >= 7 && phoneDigits.length <= 15;
       if (!emailContact && !phoneContact) {
         return error('Enter a valid recipient email address or cell phone number.', 400);
       }
