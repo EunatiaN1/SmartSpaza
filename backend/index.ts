@@ -583,7 +583,7 @@ export const handler = router({
   'GET /api/wallet': [
     async ({ query }) => {
       const email = String(query?.email || '').trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return error('Enter a valid wallet email address.', 400);
+      if (!isValidEmail(email)) return error('Enter a valid wallet email address.', 400);
       const walletId = 'wallet-' + encodeURIComponent(email);
       try {
         let [account] = await db.get<Record<string, any>>('spaza_wallet_accounts', [walletId], { consistent: true });
@@ -615,7 +615,7 @@ export const handler = router({
       const recipientEmail = String(input.recipientEmail || '').trim().toLowerCase();
       const amount = Number(input.amount);
       const requestId = String(input.requestId || '').trim();
-      const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+      const validEmail = isValidEmail;
       if (!validEmail(senderEmail) || !validEmail(recipientEmail) || senderEmail === recipientEmail || !Number.isFinite(amount) || amount <= 0 || amount > 100000 || !/^[A-Za-z0-9-]{12,80}$/.test(requestId)) {
         return error('Enter different valid wallet emails, an amount up to R100,000 and a unique request reference.', 400);
       }
@@ -668,7 +668,7 @@ export const handler = router({
       const network = String(input.network || 'testnet');
       const direction = String(input.direction || 'deposit');
       const validAddress = /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/;
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !validAddress.test(senderAddress) || !validAddress.test(destinationAddress) || senderAddress === destinationAddress || !/^[A-F0-9]{64}$/.test(txHash) || !['mainnet', 'testnet'].includes(network) || !['deposit', 'withdrawal'].includes(direction)) {
+      if (!isValidEmail(email) || !validAddress.test(senderAddress) || !validAddress.test(destinationAddress) || senderAddress === destinationAddress || !/^[A-F0-9]{64}$/.test(txHash) || !['mainnet', 'testnet'].includes(network) || !['deposit', 'withdrawal'].includes(direction)) {
         return error('Enter a valid wallet email, sender and recipient addresses, transaction hash, network and direction.', 400);
       }
       try {
@@ -699,28 +699,36 @@ export const handler = router({
       const last4 = String(input.cardLast4 || '');
       const cardType = String(input.cardType || 'Card');
       const cardholderName = String(input.cardholderName || '').trim();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !Number.isFinite(amount) || amount <= 0 || amount > 100000 ||
-          !/^\d{4}$/.test(last4) || !cardholderName || !['Visa', 'Mastercard', 'Virtual card'].includes(cardType)) {
+      if (!isValidEmail(email) || !Number.isFinite(amount) || amount <= 0 || amount > 100000 ||
+          !/^\\d{4}$/.test(last4) || !cardholderName || !['Visa', 'Mastercard', 'Virtual card'].includes(cardType)) {
         return error('Enter a valid email, amount and card details using only the final four digits.', 400);
       }
-      const walletId = 'wallet-' + encodeURIComponent(email);
-      const now = new Date().toISOString();
-      const reference = 'DEMO-DEP-' + Date.now().toString(36).toUpperCase();
       try {
-        let [account] = await db.get<Record<string, any>>('spaza_wallet_accounts', [walletId], { consistent: true });
-        if (!account) {
-          await db.tx.add('spaza_wallet_accounts', [{ id: walletId, email, balance: 0, currency: 'ZAR', createdAt: now }]);
-          [account] = await db.get<Record<string, any>>('spaza_wallet_accounts', [walletId], { consistent: true });
-        }
-        if (!account) return error('Demo wallet could not be created.', 503);
-        const updated = { ...account, balance: Number((Number(account.balance || 0) + amount).toFixed(2)), updatedAt: now };
-        const update = db.tx.update('spaza_wallet_accounts', [{ id: walletId, record: updated, if: { balance: account.balance || 0 } }]);
-        const log = db.tx.add('spaza_wallet_transactions', [{ email, type: 'deposit', amount: Number(amount.toFixed(2)), currency: 'ZAR', status: 'Demo completed', method: cardType + ' •••• ' + last4, cardholderName, reference, createdAt: now }]);
-        const [saved, [transactionId]] = await db.transact([update, log]);
-        if (!saved || !transactionId) return error('Wallet balance changed. Reload and retry.', 409);
-        return json({ status: 'Demo completed', balance: updated.balance, reference, message: 'Demo card deposit recorded. No card was charged and no real funds were received.' }, 201);
+        const { shop } = await ensureRlusdDemoAccounts();
+        const value = Number(amount.toFixed(2));
+        const shopBalance = Number(shop.balance || 0);
+        const now = new Date().toISOString();
+        const reference = 'DEMO-CARD-RLUSD-' + Date.now().toString(36).toUpperCase();
+        const update = db.tx.update('spaza_rlusd_demo_wallets', [{
+          id: 'shop',
+          record: { ...shop, balance: Number((shopBalance + value).toFixed(2)), updatedAt: now },
+          if: { balance: shop.balance || 0 },
+        }]);
+        const activity = db.tx.add('spaza_wallet_transactions', [{
+          id: reference, userLabel: 'SmartSpaza Store', email,
+          type: 'card_deposit', amount: value, currency: 'RLUSD',
+          status: 'Completed (Demo)', method: cardType + ' •••• ' + last4,
+          cardholderName, reference, createdAt: now,
+        }]);
+        const [saved, [transactionId]] = await db.transact([update, activity]);
+        if (!saved || !transactionId) return error('Store RLUSD balance changed. Reload and retry.', 409);
+        return json({
+          status: 'Completed (Demo)', balance: Number((shopBalance + value).toFixed(2)),
+          currency: 'RLUSD', reference,
+          message: 'Demo card deposit recorded in the store RLUSD wallet. No card was charged and no real funds or tokens were received.',
+        }, 201);
       } catch {
-        return error('Demo deposit could not be recorded.', 503);
+        return error('Demo card deposit could not be recorded.', 503);
       }
     },
   ],
@@ -764,7 +772,7 @@ export const handler = router({
     async ({ body }) => {
       const input = body as Record<string, unknown>;
       const email = String(input.email || '').trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return error('Enter a valid wallet email.', 400);
+      if (!isValidEmail(email)) return error('Enter a valid wallet email.', 400);
       const sessionId = 'face-demo-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
       const now = Date.now();
       const expiresAt = new Date(now + 5 * 60 * 1000).toISOString();
@@ -1302,7 +1310,7 @@ export const handler = router({
       const country = String(input.country || '').trim();
       const amount = Number(input.amount);
       const requestId = String(input.requestId || '').trim();
-      const emailContact = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient);
+      const emailContact = isValidEmail(recipient);
       const phoneDigits = recipient.replace(/\D/g, '');
       const phoneContact = /^\+?[0-9() .-]{7,20}$/.test(recipient) && phoneDigits.length >= 7 && phoneDigits.length <= 15;
       if (!emailContact && !phoneContact) {
