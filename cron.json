@@ -1,0 +1,9 @@
+[
+  {
+    "name": "expiry-markdown",
+    "cron": "5 0 * * *",
+    "handler": "expiryMarkdownHandler",
+    "timezone": "Africa/Johannesburg",
+    "payload": {}
+  }
+]
