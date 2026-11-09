@@ -691,6 +691,23 @@ export const handler = router({
       }
     },
   ],
+  'GET /api/fx/zar-rlusd-quote': [
+    async ({ query }) => {
+      const zarAmount = Number(query?.zarAmount || 0);
+      if (!Number.isFinite(zarAmount) || zarAmount <= 0 || zarAmount > 100000) {
+        return error('Enter a valid ZAR amount up to R100,000.', 400);
+      }
+      try {
+        const { rates, timestamp } = await getFxRates();
+        const zarPerRlusd = Number(rates.ZAR);
+        if (!Number.isFinite(zarPerRlusd) || zarPerRlusd <= 0) return error('A valid ZAR exchange rate is unavailable.', 503);
+        const rlusdAmount = Number((zarAmount / zarPerRlusd).toFixed(6));
+        return json({ quote: { zarAmount: Number(zarAmount.toFixed(2)), rlusdAmount, zarPerRlusd, timestamp, sourceCurrency: 'ZAR', destinationCurrency: 'RLUSD', quoteType: 'Indicative demo conversion; RLUSD is assumed to track USD 1:1. Provider spreads and fees are not included.' } });
+      } catch (err) {
+        return error(err instanceof Error ? err.message : 'Current ZAR/RLUSD quote unavailable.', 503);
+      }
+    },
+  ],
   'POST /api/wallet/deposit': [
     async ({ body }) => {
       const input = body as Record<string, unknown>;
@@ -699,36 +716,60 @@ export const handler = router({
       const last4 = String(input.cardLast4 || '');
       const cardType = String(input.cardType || 'Card');
       const cardholderName = String(input.cardholderName || '').trim();
+      const targetWallet = String(input.targetWallet || 'personal_zar');
       if (!isValidEmail(email) || !Number.isFinite(amount) || amount <= 0 || amount > 100000 ||
-          !/^\d{4}$/.test(last4) || !cardholderName || !['Visa', 'Mastercard', 'Virtual card'].includes(cardType)) {
-        return error('Enter a valid email, amount and card details using only the final four digits.', 400);
+          !/^\d{4}$/.test(last4) || !cardholderName || !['Visa', 'Mastercard', 'Virtual card'].includes(cardType) ||
+          !['personal_zar', 'store_rlusd'].includes(targetWallet)) {
+        return error('Enter a valid email, amount, destination and card details using only the final four digits.', 400);
       }
       try {
-        const { shop } = await ensureRlusdDemoAccounts();
         const value = Number(amount.toFixed(2));
-        const shopBalance = Number(shop.balance || 0);
         const now = new Date().toISOString();
-        const reference = 'DEMO-CARD-RLUSD-' + Date.now().toString(36).toUpperCase();
+        const reference = 'DEMO-CARD-' + (targetWallet === 'store_rlusd' ? 'RLUSD-' : 'ZAR-') + Date.now().toString(36).toUpperCase();
+        if (targetWallet === 'personal_zar') {
+          const walletId = 'wallet-' + encodeURIComponent(email);
+          const [account] = await db.get<Record<string, any>>('spaza_wallet_accounts', [walletId], { consistent: true });
+          if (!account) return error('Load or create your personal ZAR demo wallet before depositing.', 404);
+          const updatedBalance = Number((Number(account.balance || 0) + value).toFixed(2));
+          const update = db.tx.update('spaza_wallet_accounts', [{ id: walletId, record: { ...account, balance: updatedBalance, updatedAt: now }, if: { balance: account.balance || 0 } }]);
+          const log = db.tx.add('spaza_wallet_transactions', [{
+            id: reference, email, type: 'deposit', amount: value, currency: 'ZAR',
+            status: 'Completed (Demo)', method: cardType + ' •••• ' + last4,
+            cardholderName, reference, createdAt: now, destination: 'Personal ZAR demo account',
+          }]);
+          const [saved, [transactionId]] = await db.transact([update, log]);
+          if (!saved || !transactionId) return error('Personal ZAR wallet balance changed. Reload and retry.', 409);
+          return json({ status: 'Completed (Demo)', balance: updatedBalance, currency: 'ZAR', reference, targetWallet, message: 'Demo deposit credited to your personal ZAR wallet. No card was charged and no real funds were received.' }, 201);
+        }
+
+        const { shop } = await ensureRlusdDemoAccounts();
+        const { rates, timestamp } = await getFxRates();
+        const zarPerRlusd = Number(rates.ZAR);
+        if (!Number.isFinite(zarPerRlusd) || zarPerRlusd <= 0) return error('A valid current ZAR/RLUSD rate is unavailable. No deposit was recorded.', 503);
+        const rlusdValue = Number((value / zarPerRlusd).toFixed(6));
+        if (rlusdValue <= 0) return error('The converted RLUSD amount is too small to record.', 400);
+        const shopBalance = Number(shop.balance || 0);
+        const updatedBalance = Number((shopBalance + rlusdValue).toFixed(6));
         const update = db.tx.update('spaza_rlusd_demo_wallets', [{
-          id: 'shop',
-          record: { ...shop, balance: Number((shopBalance + value).toFixed(2)), updatedAt: now },
-          if: { balance: shop.balance || 0 },
+          id: 'shop', record: { ...shop, balance: updatedBalance, updatedAt: now }, if: { balance: shop.balance || 0 },
         }]);
         const activity = db.tx.add('spaza_wallet_transactions', [{
-          id: reference, userLabel: 'SmartSpaza Store', email,
-          type: 'card_deposit', amount: value, currency: 'RLUSD',
-          status: 'Completed (Demo)', method: cardType + ' •••• ' + last4,
-          cardholderName, reference, createdAt: now,
+          id: reference, userLabel: 'SmartSpaza Store', email, type: 'card_deposit',
+          amount: rlusdValue, currency: 'RLUSD', sourceAmount: value, sourceCurrency: 'ZAR',
+          fxRate: zarPerRlusd, fxTimestamp: timestamp, status: 'Completed (Demo)',
+          method: cardType + ' •••• ' + last4, cardholderName, reference, createdAt: now,
+          destination: 'Store RLUSD demo account',
         }]);
         const [saved, [transactionId]] = await db.transact([update, activity]);
         if (!saved || !transactionId) return error('Store RLUSD balance changed. Reload and retry.', 409);
         return json({
-          status: 'Completed (Demo)', balance: Number((shopBalance + value).toFixed(2)),
-          currency: 'RLUSD', reference,
-          message: 'Demo card deposit recorded in the store RLUSD wallet. No card was charged and no real funds or tokens were received.',
+          status: 'Completed (Demo)', balance: updatedBalance, currency: 'RLUSD',
+          sourceAmount: value, sourceCurrency: 'ZAR', convertedAmount: rlusdValue,
+          fxRate: zarPerRlusd, fxTimestamp: timestamp, reference, targetWallet,
+          message: `Demo deposit converted R${value.toFixed(2)} to ${rlusdValue.toFixed(6)} RLUSD using an indicative rate of R${zarPerRlusd.toFixed(4)} per RLUSD. No card was charged and no real funds or tokens were received.`,
         }, 201);
-      } catch {
-        return error('Demo card deposit could not be recorded.', 503);
+      } catch (err) {
+        return error(err instanceof Error ? err.message : 'Demo card deposit could not be recorded.', 503);
       }
     },
   ],

@@ -73,6 +73,9 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
   const [demoFundingBalance, setDemoFundingBalance] = useState(0);
   const [rlusdDepositAmount, setRlusdDepositAmount] = useState('');
   const [rlusdDepositBusy, setRlusdDepositBusy] = useState(false);
+  const [depositDestination, setDepositDestination] = useState<'personal_zar' | 'store_rlusd'>('personal_zar');
+  const [fxQuote, setFxQuote] = useState<{ zarAmount: number; rlusdAmount: number; zarPerRlusd: number; timestamp: string } | null>(null);
+  const [fxQuoteLoading, setFxQuoteLoading] = useState(false);
 
   async function loadSharedTransactions() {
     const response = await api.get('/api/transactions');
@@ -221,6 +224,27 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
     }
   }
 
+  useEffect(() => {
+    if (mode !== 'deposit' || depositDestination !== 'store_rlusd' || !amount || Number(amount) <= 0) {
+      setFxQuote(null);
+      return;
+    }
+    setFxQuote(null);
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setFxQuoteLoading(true);
+      try {
+        const response = await api.get('/api/fx/zar-rlusd-quote?zarAmount=' + encodeURIComponent(amount));
+        if (!cancelled) setFxQuote(response.data.quote);
+      } catch {
+        if (!cancelled) setFxQuote(null);
+      } finally {
+        if (!cancelled) setFxQuoteLoading(false);
+      }
+    }, 350);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [amount, depositDestination, mode]);
+
   async function submitTransaction(event: React.FormEvent) {
     event.preventDefault();
     const value = Number(amount);
@@ -236,6 +260,10 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
       onNotice('Complete the demo face-authentication check before withdrawal.');
       return;
     }
+    if (mode === 'deposit' && depositDestination === 'store_rlusd' && (!fxQuote || fxQuote.zarAmount !== Number(value.toFixed(2)))) {
+      onNotice('A current ZAR/RLUSD quote is required before this demo conversion.');
+      return;
+    }
     setBusy(true);
     try {
       const response = await api.post('/api/wallet/' + mode, {
@@ -244,11 +272,14 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
         cardholderName: cardName.trim(),
         cardLast4,
         cardType,
+        ...(mode === 'deposit' ? { targetWallet: depositDestination } : {}),
         ...(mode === 'withdraw' ? { faceSessionId: faceSession?.sessionId } : {}),
       });
       setAmount('');
       setFaceSession(null);
+      setFxQuote(null);
       if (mode === 'deposit') {
+        await loadWallet();
         await loadRlusdDemoAccount();
         await loadSharedTransactions();
       } else {
@@ -378,6 +409,25 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
               placeholder="500.00"
             />
           </label>
+          {mode === 'deposit' && (
+            <div className="form-stack">
+              <label>Where would you like this deposit to go?
+                <select value={depositDestination} onChange={e => setDepositDestination(e.target.value as 'personal_zar' | 'store_rlusd')}>
+                  <option value="personal_zar">Personal ZAR demo account</option>
+                  <option value="store_rlusd">Store RLUSD account (convert from ZAR)</option>
+                </select>
+              </label>
+              {depositDestination === 'store_rlusd' ? (
+                <div className="wallet-asset-row">
+                  <span>{fxQuoteLoading ? 'Getting current exchange rate…' : fxQuote ? `Indicative rate: 1 RLUSD ≈ R${fxQuote.zarPerRlusd.toFixed(4)}` : 'Live conversion quote unavailable'}</span>
+                  <b>{fxQuote ? `${fxQuote.rlusdAmount.toFixed(2)} RLUSD` : '—'}</b>
+                  {fxQuote && <small>R{fxQuote.zarAmount.toFixed(2)} converts to approximately {fxQuote.rlusdAmount.toFixed(2)} RLUSD. Rate updated {new Date(fxQuote.timestamp).toLocaleString()}.</small>}
+                </div>
+              ) : (
+                <small>Your deposit will be credited in rand to the personal ZAR demo wallet linked to the email above.</small>
+              )}
+            </div>
+          )}
           <label>Cardholder name
             <input required value={cardName} onChange={e => setCardName(e.target.value)} placeholder="Name on card" />
           </label>
@@ -421,7 +471,7 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
             {busy ? 'Processing…' : mode === 'deposit' ? 'Simulate card deposit' : 'Simulate card withdrawal'}
             <CreditCard size={16} />
           </button>
-          <p className="form-footnote">Demo deposits credit the store RLUSD account; withdrawals use the personal ZAR demo wallet. Only the cardholder name and final four digits are recorded. Never enter a full card number or CVV.</p>
+          <p className="form-footnote">Choose whether a deposit credits your personal ZAR demo wallet or converts ZAR into RLUSD for the store demo wallet. Withdrawals use the personal ZAR demo wallet. Only the cardholder name and final four digits are recorded. Never enter a full card number or CVV.</p>
         </form>
       </section>
 
