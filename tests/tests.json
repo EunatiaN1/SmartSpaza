@@ -66,7 +66,7 @@
     "expected": "Valid supplier contact details are accepted and invalid ones are rejected. The ZAR and RLUSD demo payments each debit the correct store ledger and credit the supplier's matching ledger. The supplier RLUSD balance and payment history reflect the RLUSD payment, with paired debit and credit records in the shared activity feed. No real bank or blockchain funds move."
   },
   {
-    "name": "Store RLUSD deposits and on-chain account status",
+    "name": "Personal ZAR and converted store RLUSD deposits",
     "viewport": "desktop",
     "covers": [
       "store XRPL account address",
@@ -78,18 +78,24 @@
       "cardholder name and final four only",
       "card deposit transaction history",
       "separate on-chain RLUSD trust-line balance",
-      "private key not requested"
+      "private key not requested",
+      "deposit destination selection",
+      "personal ZAR wallet credit",
+      "current ZAR/RLUSD quote",
+      "ZAR source amount and RLUSD converted amount",
+      "FX quote timestamp"
     ],
-    "description": "Verifies both internal funding-pool and demo card deposits credit the store RLUSD ledger, are recorded in activity history, and remain separate from on-chain balances.",
+    "description": "Verifies card demo deposits can target the personal ZAR wallet or convert ZAR into the store RLUSD demo wallet using a current indicative FX quote, with the two balances kept separate.",
     "steps": [
-      "Open Wallet",
-      "Enter a public XRPL address and select Testnet or Mainnet, then save the shop wallet",
-      "Record a demo RLUSD deposit from the funding pool",
-      "Enter a wallet email, cardholder name, card brand, final four digits and a demo deposit amount",
-      "Submit the demo card deposit",
-      "Review the store RLUSD balance and shared transaction history",
-      "Confirm the on-chain RLUSD balance and trust-line status remain separate"
+      "Open Wallet and load or create the personal wallet using its email",
+      "Choose Deposit and select Personal ZAR demo account",
+      "Enter a ZAR amount and card demo details, then submit",
+      "Confirm the personal ZAR balance increases by the ZAR amount",
+      "Choose Store RLUSD account (convert from ZAR)",
+      "Enter a ZAR amount and review the current indicative ZAR/RLUSD rate, converted RLUSD amount and quote timestamp",
+      "Submit the demo deposit and review the store RLUSD balance and shared transaction history",
+      "Confirm the personal ZAR and store RLUSD balances remain separate and on-chain balances are unchanged"
     ],
-    "expected": "The funding pool is debited and store demo RLUSD credited for the pool deposit. The demo card deposit also credits the store RLUSD ledger and appears as an RLUSD card_deposit transaction. Only cardholder name and last four digits are stored; no card is charged. On-chain balance and trust-line status remain separate."
+    "expected": "Personal deposits credit only the email-linked personal ZAR demo wallet. Store RLUSD deposits convert the ZAR amount using a current provider rate (RLUSD assumed 1 USD), credit only the converted RLUSD amount and record source ZAR, FX rate and timestamp. A stale or unavailable quote blocks the deposit. No card is charged and no real funds or tokens move."
   }
 ]
