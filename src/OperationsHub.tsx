@@ -49,6 +49,7 @@ type Payment = {
   reference: string;
   method: string;
   status: string;
+  createdAt?: string;
 };
 const emptyOwner: OwnerProfile = {
   fullName: '', businessName: '', registrationNumber: '', email: '',
@@ -284,7 +285,7 @@ export default function OperationsHub({
       </section>
       <section className="panel ops-panel">
         <div className="panel-heading"><div><span className="section-kicker">SUPPLIERS</span><h2>Saved supplier records</h2></div><Building2 size={19} /></div>
-        {suppliers.length ? suppliers.map(s => <div className="ops-row" key={s.id}><div><strong>{s.name}</strong><span>{s.country} · {s.email || s.phone || 'No contact details'}<br />RLUSD demo balance: {Number(s.rlusdBalance || 0).toFixed(2)} RLUSD · {s.rlusdPaymentHistory?.length || 0} RLUSD payments</span></div><button className="icon-btn" onClick={() => beginSupplierEdit(s)} aria-label="Edit supplier"><Pencil size={15} /></button><button className="icon-btn" onClick={() => removeSupplier(s.id)} aria-label="Delete supplier"><Trash2 size={15} /></button></div>) : <div className="empty-inline">No suppliers saved yet.</div>}
+        {suppliers.length ? suppliers.map(s => <div className="ops-row" key={s.id}><div><strong>{s.name}</strong><span>{s.country} · {s.email || s.phone || 'No contact details'}<br />RLUSD demo balance: {Number(s.rlusdBalance || 0).toFixed(2)} RLUSD · {s.rlusdPaymentHistory?.length || 0} RLUSD payments</span><details><summary>View RLUSD payment history</summary>{s.rlusdPaymentHistory?.length ? s.rlusdPaymentHistory.map(payment => <div className="ops-row" key={payment.id}><div><strong>{payment.amount.toFixed(2)} RLUSD</strong><span>{payment.reference} · {payment.status} · {payment.createdAt ? new Date(payment.createdAt).toLocaleString() : 'Date unavailable'}</span></div></div>) : <span>No RLUSD payments recorded.</span>}</details></div><button className="icon-btn" onClick={() => beginSupplierEdit(s)} aria-label="Edit supplier"><Pencil size={15} /></button><button className="icon-btn" onClick={() => removeSupplier(s.id)} aria-label="Delete supplier"><Trash2 size={15} /></button></div>) : <div className="empty-inline">No suppliers saved yet.</div>}
       </section>
       <section className="panel ops-panel">
         <div className="panel-heading"><div><span className="section-kicker">ACCOUNTS PAYABLE</span><h2>Prepare supplier payment</h2></div><CreditCard size={19} /></div>
