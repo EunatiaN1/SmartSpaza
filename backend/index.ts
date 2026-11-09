@@ -700,7 +700,7 @@ export const handler = router({
       const cardType = String(input.cardType || 'Card');
       const cardholderName = String(input.cardholderName || '').trim();
       if (!isValidEmail(email) || !Number.isFinite(amount) || amount <= 0 || amount > 100000 ||
-          !/^\\d{4}$/.test(last4) || !cardholderName || !['Visa', 'Mastercard', 'Virtual card'].includes(cardType)) {
+          !/^\d{4}$/.test(last4) || !cardholderName || !['Visa', 'Mastercard', 'Virtual card'].includes(cardType)) {
         return error('Enter a valid email, amount and card details using only the final four digits.', 400);
       }
       try {
