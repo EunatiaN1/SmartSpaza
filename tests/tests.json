@@ -1,0 +1,81 @@
+[
+  {
+    "name": "Instant RLUSD demo transfer without owner approval",
+    "sanity": true,
+    "viewport": "mobile",
+    "covers": [
+      "RLUSD as global transfer asset",
+      "demo shop balance debit",
+      "recipient demo balance credit",
+      "instant completed status",
+      "idempotent retry",
+      "shared transaction history"
+    ],
+    "description": "Verifies the global transfer form settles an internal RLUSD demo payment using a recipient's registered wallet email or cell phone number.",
+    "steps": [
+      "Open Transfers",
+      "Enter a registered recipient wallet email or cell phone number and destination country",
+      "Enter an RLUSD amount",
+      "Send the RLUSD demo payment",
+      "Review transfer history"
+    ],
+    "expected": "The payment shows Completed (Demo), the shop balance decreases, the recipient account identified by email or phone increases and no owner approval is requested."
+  },
+  {
+    "name": "Dashboard weekly and monthly performance",
+    "viewport": "desktop",
+    "covers": [
+      "weekly performance",
+      "previous month performance",
+      "current month performance",
+      "sales revenue and gross profit totals"
+    ],
+    "description": "Verifies each dashboard performance period returns a date-scoped report.",
+    "steps": [
+      "Open the dashboard",
+      "Select Last week",
+      "Select Last month",
+      "Select This month"
+    ],
+    "expected": "Each period displays its date range, revenue, stock costs, gross profit, margin and recorded sales count."
+  },
+  {
+    "name": "Supplier payment without email",
+    "viewport": "mobile",
+    "covers": [
+      "supplier creation without email",
+      "supplier payment",
+      "shop demo wallet debit",
+      "supplier demo balance credit"
+    ],
+    "description": "Verifies supplier payments complete in demo mode without supplier email details.",
+    "steps": [
+      "Add a supplier using a name and country only",
+      "Choose the supplier in Accounts Payable",
+      "Enter a ZAR amount",
+      "Pay from the demo shop account"
+    ],
+    "expected": "The supplier payment completes immediately and records both sides without an email address or approval queue."
+  },
+  {
+    "name": "Store RLUSD demo deposit and on-chain account status",
+    "viewport": "desktop",
+    "covers": [
+      "store RLUSD account address",
+      "network selection",
+      "available store demo RLUSD balance",
+      "demo funding pool debit",
+      "store demo balance credit",
+      "separate on-chain RLUSD trust-line balance",
+      "private key not requested"
+    ],
+    "description": "Verifies a connected store XRPL address displays its validated RLUSD trust-line balance and deposit destination.",
+    "steps": [
+      "Open Wallet",
+      "Enter a public XRPL address",
+      "Select Testnet or Mainnet",
+      "Save the shop wallet"
+    ],
+    "expected": "The store demo account shows Available and its balance. A demo deposit debits the funding pool and credits the store. On-chain balance and trust-line status remain separate."
+  }
+]
