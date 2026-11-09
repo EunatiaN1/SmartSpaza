@@ -229,6 +229,7 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
       setFxQuote(null);
       return;
     }
+    setFxQuote(null);
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       setFxQuoteLoading(true);
@@ -259,7 +260,7 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
       onNotice('Complete the demo face-authentication check before withdrawal.');
       return;
     }
-    if (mode === 'deposit' && depositDestination === 'store_rlusd' && !fxQuote) {
+    if (mode === 'deposit' && depositDestination === 'store_rlusd' && (!fxQuote || fxQuote.zarAmount !== Number(value.toFixed(2)))) {
       onNotice('A current ZAR/RLUSD quote is required before this demo conversion.');
       return;
     }
