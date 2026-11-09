@@ -151,8 +151,11 @@ async function dashboardData() {
     db.list<Sale>(SALES, { limit: 500 }),
     db.list<Transfer>(TRANSFERS, { limit: 50 }),
   ]);
-  const revenue = sales.items.reduce((sum, sale) => sum + Number(sale.revenue || 0), 0);
-  const costs = sales.items.reduce((sum, sale) => sum + Number(sale.cost || 0), 0);
+  // Only completed, itemised POS sales count as real recorded sales. Older generated
+  // workspace activity remains visible as sample history but never inflates profit.
+  const recordedSales = sales.items.filter(sale => Boolean((sale as any).saleId));
+  const revenue = recordedSales.reduce((sum, sale) => sum + Number(sale.revenue || 0), 0);
+  const costs = recordedSales.reduce((sum, sale) => sum + Number(sale.cost || 0), 0);
   const margin = revenue > 0 ? ((revenue - costs) / revenue) * 100 : 0;
   return {
     inventory: inventory.items,
@@ -160,7 +163,7 @@ async function dashboardData() {
     revenue: Math.round(revenue * 100) / 100,
     costs: Math.round(costs * 100) / 100,
     margin: Math.round(margin * 100) / 100,
-    salesCount: sales.items.length,
+    salesCount: recordedSales.length,
     initialized: true,
   };
 }
@@ -321,6 +324,90 @@ async function ensureRlusdDemoAccounts() {
 }
 
 export const handler = router({
+  'GET /api/sales': [
+    async () => {
+      try {
+        const result = await db.list<Record<string, any>>(SALES, { limit: 500 });
+        const rows = result.items
+          .filter(sale => Boolean(sale.saleId))
+          .sort((a, b) => String(b.createdAt || b.date).localeCompare(String(a.createdAt || a.date)))
+          .slice(0, 100);
+        return json(rows);
+      } catch {
+        return error('Sales history could not be loaded.', 503);
+      }
+    },
+  ],
+  'POST /api/sales/checkout': [
+    async ({ body }) => {
+      const input = body as { requestId?: string; items?: Array<{ productId?: string; quantity?: number }> };
+      const requestId = String(input.requestId || '');
+      const lines = Array.isArray(input.items) ? input.items : [];
+      if (!/^[A-Za-z0-9_-]{8,100}$/.test(requestId) || !lines.length || lines.length > 50) {
+        return error('Add at least one product to the sale and submit a valid sale reference.', 400);
+      }
+      const quantities = new Map<string, number>();
+      for (const line of lines) {
+        const id = String(line.productId || '');
+        const quantity = Number(line.quantity);
+        if (!id || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 10000) {
+          return error('Each sale line needs a product and a whole-number quantity.', 400);
+        }
+        quantities.set(id, (quantities.get(id) || 0) + quantity);
+      }
+      if (quantities.size !== lines.length) return error('A product can appear only once in the sale. Update its quantity instead.', 400);
+      try {
+        const ids = [...quantities.keys()];
+        const products = await db.get<Product>(INVENTORY, ids, { consistent: true });
+        if (products.some(product => !product)) return error('One or more products are no longer in inventory. Refresh and try again.', 409);
+        const now = new Date().toISOString();
+        const saleLines: Array<Record<string, unknown>> = [];
+        let revenue = 0;
+        let cost = 0;
+        const stockUpdates = ids.map((id, index) => {
+          const product = products[index]!;
+          const quantity = quantities.get(id)!;
+          if (Number(product.stock) < quantity) throw new Error('INSUFFICIENT_STOCK:' + product.name);
+          const unitPrice = Number(product.price);
+          const unitCost = Number(product.cost);
+          if (!Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isFinite(unitCost) || unitCost < 0) {
+            throw new Error('INVALID_PRODUCT:' + product.name);
+          }
+          const lineRevenue = Number((unitPrice * quantity).toFixed(2));
+          const lineCost = Number((unitCost * quantity).toFixed(2));
+          revenue += lineRevenue;
+          cost += lineCost;
+          saleLines.push({
+            productId: id, productName: product.name, quantity,
+            unitPrice, unitCost, lineRevenue, lineCost,
+          });
+          return db.tx.update(INVENTORY, [{
+            id, record: { stock: Number(product.stock) - quantity },
+            if: { stock: product.stock },
+          }], { patch: true });
+        });
+        const sale = {
+          saleId: requestId, date: now.slice(0, 10), createdAt: now,
+          items: saleLines, revenue: Number(revenue.toFixed(2)),
+          cost: Number(cost.toFixed(2)), profit: Number((revenue - cost).toFixed(2)),
+          margin: revenue > 0 ? Number((((revenue - cost) / revenue) * 100).toFixed(2)) : 0,
+          currency: 'ZAR', status: 'Completed',
+          source: 'SmartSpaza POS',
+        };
+        const saleWrite = db.tx.add(SALES, [{ id: requestId, ...sale }]);
+        const results = await db.transact([...stockUpdates, saleWrite]);
+        const saleResult = results[results.length - 1] as Array<string | null>;
+        if (!saleResult?.[0]) return error('Sale could not be saved. Refresh and retry.', 409);
+        return json({ ...sale, message: 'Sale recorded. Stock updated and gross profit added to your reports.' }, 201);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : '';
+        if (message.startsWith('INSUFFICIENT_STOCK:')) return error(message.replace('INSUFFICIENT_STOCK:', '') + ' does not have enough stock for this sale.', 409);
+        if (message.startsWith('INVALID_PRODUCT:')) return error('Invalid selling price or unit cost for ' + message.replace('INVALID_PRODUCT:', '') + '.', 400);
+        console.error('POS checkout failed', err);
+        return error('Sale was not completed. No stock or sales totals were changed.', 503);
+      }
+    },
+  ],
   'GET /api/dashboard': [
     async () => {
       try {
@@ -365,6 +452,7 @@ export const handler = router({
         }
         const sales = await db.list<Sale>(SALES, { limit: 5000 });
         const rows = sales.items.filter(sale => {
+          if (!(sale as any).saleId) return false;
           const date = new Date(String(sale.date) + 'T12:00:00');
           return date >= start && date <= end;
         });

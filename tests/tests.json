@@ -97,5 +97,76 @@
       "Confirm the personal ZAR and store RLUSD balances remain separate and on-chain balances are unchanged"
     ],
     "expected": "Personal deposits credit only the email-linked personal ZAR demo wallet. Store RLUSD deposits convert the ZAR amount using a current provider rate (RLUSD assumed 1 USD), credit only the converted RLUSD amount and record source ZAR, FX rate and timestamp. A stale or unavailable quote blocks the deposit. No card is charged and no real funds or tokens move."
+  },
+  {
+    "name": "POS sale entry, stock deduction and actual profit reporting",
+    "viewport": "mobile",
+    "covers": [
+      "select inventory products",
+      "whole-number sale quantities",
+      "selling price and unit cost snapshots",
+      "atomic stock deduction",
+      "completed sale record",
+      "gross profit calculation",
+      "weekly and monthly actual sales reporting",
+      "no sample sales included in actual profit"
+    ],
+    "description": "Verifies a shop owner can record a sale from inventory, automatically reduce stock, and see revenue, cost and gross profit reflected in real performance reports.",
+    "steps": [
+      "Open Record sales",
+      "Add two or more in-stock products to the sale",
+      "Adjust quantities and review estimated revenue, stock cost and gross profit",
+      "Complete the sale",
+      "Confirm inventory quantities decrease by the sold units",
+      "Open the dashboard and review Last week or This month performance",
+      "Confirm the completed sale appears in recent sales and contributes to actual revenue and profit"
+    ],
+    "expected": "The sale is saved once, stock deductions and sale record commit atomically, line items retain the sale-time selling price and unit cost, and actual performance reports include the completed sale. Generated sample activity is excluded from actual sales/profit totals. Insufficient stock rejects checkout without partially reducing inventory."
+  },
+  {
+    "name": "Manual items-sold entry reduces inventory and updates profit",
+    "viewport": "mobile",
+    "covers": [
+      "manual product selection for sold items",
+      "manual whole-number quantity sold",
+      "stock deducted by exact quantity",
+      "remaining inventory shown after refresh",
+      "manual sale included in sales history",
+      "manual sale revenue and gross profit"
+    ],
+    "description": "Verifies the owner can record quantities already sold without using the existing customer-basket POS flow, and that inventory and profit figures update.",
+    "setup": [
+      "Add an inventory product named Bread with 15 units, a selling price of R16 and a unit cost of R12."
+    ],
+    "steps": [
+      "Open Record sales and find the separate Record items sold section",
+      "Choose Bread from the product list",
+      "Enter 10 as the quantity sold",
+      "Review the preview showing 15 currently in stock and 5 after recording",
+      "Tap Record quantity sold",
+      "Refresh inventory and review the sales history and today’s performance"
+    ],
+    "expected": "The manual entry records 10 Bread sold, inventory falls from 15 to 5, the sale appears in history with R160 revenue, R120 stock cost and R40 gross profit, and the existing customer-basket checkout remains available and unchanged."
+  },
+  {
+    "name": "Current and previous week sales reports",
+    "viewport": "mobile",
+    "covers": [
+      "sales report period dropdown",
+      "this week revenue and gross profit",
+      "previous week report",
+      "items sold count",
+      "daily profit trend",
+      "empty state when no sales in selected period"
+    ],
+    "description": "Checks the shop owner can switch between this week's and previous week's actual sales and see performance totals and transactions.",
+    "steps": [
+      "Open Record Sales",
+      "Scroll to Sales Performance Report",
+      "Choose This week and review transactions, items sold, revenue, stock cost, gross profit and margin",
+      "Choose Previous week and confirm the report period and totals change",
+      "Choose All recorded sales and review available sale history"
+    ],
+    "expected": "The dropdown switches between current week, previous week, today and all recorded sales. Metrics and transaction rows reflect only completed real sales in the selected period; an empty period displays a clear no-sales message."
   }
 ]

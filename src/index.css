@@ -1304,3 +1304,14 @@ footer span:last-child {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Point-of-sale and profit tracking */
+.sales-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr);gap:18px;align-items:start}
+.sales-panel{padding:22px}.sales-product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.sales-product{border:1px solid var(--line);border-radius:11px;padding:13px;background:#fff;display:grid;gap:6px;text-align:left;color:var(--ink)}
+.sales-product:disabled{opacity:.45;cursor:not-allowed}.sales-product strong{font-size:13px}.sales-product span{font-size:11px;color:var(--muted)}
+.sales-product b{font-size:14px;color:#d96b2f}.sales-cart-row{display:grid;grid-template-columns:1fr 70px auto;gap:10px;align-items:center;border-bottom:1px solid var(--line);padding:12px 0}
+.sales-cart-row strong{font-size:12px}.sales-cart-row small{display:block;color:var(--muted);font-size:10px}.sales-cart-row input{width:65px;border:1px solid var(--line);border-radius:8px;padding:8px}
+.sales-summary{display:grid;gap:11px;background:#faf9f7;border-radius:11px;padding:14px;margin:14px 0}.sales-summary div{display:flex;justify-content:space-between;gap:10px;font-size:12px}.sales-summary strong{font-weight:700}.sales-profit{color:#198754}.sales-history-row{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:12px 0;font-size:11px}.sales-history-row span{display:block;color:var(--muted);margin-top:4px}.sales-trend{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;align-items:end;height:115px;margin:15px 0}.sales-trend-col{display:grid;gap:6px;justify-items:center;height:100%;align-content:end}.sales-trend-bar{width:100%;max-width:34px;min-height:3px;background:#f3a16d;border-radius:6px 6px 2px 2px}.sales-trend-col small{font-size:9px;color:var(--muted)}
+@media(max-width:850px){.sales-layout{grid-template-columns:1fr}.sales-panel{padding:15px}.sales-product-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sales-cart-row{grid-template-columns:1fr 60px auto}}

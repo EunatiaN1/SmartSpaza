@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '@appdeploy/client';
 import OperationsHub, { PAYMENT_DESTINATIONS } from './OperationsHub';
 import WalletHub from './WalletHub';
+import SalesHub from './SalesHub';
 import {
   Activity,
   ArrowDownLeft,
@@ -644,6 +645,12 @@ function App() {
       group: t('operations'),
     },
     {
+      id: 'sales',
+      label: 'Record sales',
+      icon: Banknote,
+      group: t('operations'),
+    },
+    {
       id: 'transfers',
       label: t('transfers'),
       icon: ArrowUpRight,
@@ -788,7 +795,9 @@ function App() {
                   ? t('subtitle')
                   : page === 'inventory'
                     ? t('inventoryTitle')
-                    : t('remittanceSub')}
+                    : page === 'sales'
+                      ? 'Record each sale, update stock automatically and track gross profit.'
+                      : t('remittanceSub')}
               </p>
             </div>
             {page === 'inventory' && (
@@ -983,6 +992,7 @@ function App() {
           )}
 
           {page === 'wallet' && <WalletHub onNotice={setNotice} />}
+          {page === 'sales' && <SalesHub inventory={data.inventory} onNotice={setNotice} onRefresh={load} />}
 
           {(page === 'inventory' || page === 'suppliers' || page === 'owner') && (
             <OperationsHub
