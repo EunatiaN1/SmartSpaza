@@ -64,6 +64,16 @@ const RLUSD_ISSUER_MAINNET = 'rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De';
 const RLUSD_CURRENCY = '524C555344000000000000000000000000000000';
 const DEFAULT_FX_URL = 'https://open.er-api.com/v6/latest/USD';
 
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function isValidInternationalPhone(value: string) {
+  if (!value.trim()) return true;
+  const compact = value.trim().replace(/[\s().-]/g, '');
+  return /^\+?[1-9]\d{6,14}$/.test(compact);
+}
+
 
 function isoDate(daysAgo = 0) {
   const date = new Date();
@@ -573,7 +583,7 @@ export const handler = router({
   'GET /api/wallet': [
     async ({ query }) => {
       const email = String(query?.email || '').trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return error('Enter a valid wallet email address.', 400);
+      if (!isValidEmail(email)) return error('Enter a valid wallet email address.', 400);
       const walletId = 'wallet-' + encodeURIComponent(email);
       try {
         let [account] = await db.get<Record<string, any>>('spaza_wallet_accounts', [walletId], { consistent: true });
@@ -605,7 +615,7 @@ export const handler = router({
       const recipientEmail = String(input.recipientEmail || '').trim().toLowerCase();
       const amount = Number(input.amount);
       const requestId = String(input.requestId || '').trim();
-      const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+      const validEmail = isValidEmail;
       if (!validEmail(senderEmail) || !validEmail(recipientEmail) || senderEmail === recipientEmail || !Number.isFinite(amount) || amount <= 0 || amount > 100000 || !/^[A-Za-z0-9-]{12,80}$/.test(requestId)) {
         return error('Enter different valid wallet emails, an amount up to R100,000 and a unique request reference.', 400);
       }
@@ -658,7 +668,7 @@ export const handler = router({
       const network = String(input.network || 'testnet');
       const direction = String(input.direction || 'deposit');
       const validAddress = /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/;
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !validAddress.test(senderAddress) || !validAddress.test(destinationAddress) || senderAddress === destinationAddress || !/^[A-F0-9]{64}$/.test(txHash) || !['mainnet', 'testnet'].includes(network) || !['deposit', 'withdrawal'].includes(direction)) {
+      if (!isValidEmail(email) || !validAddress.test(senderAddress) || !validAddress.test(destinationAddress) || senderAddress === destinationAddress || !/^[A-F0-9]{64}$/.test(txHash) || !['mainnet', 'testnet'].includes(network) || !['deposit', 'withdrawal'].includes(direction)) {
         return error('Enter a valid wallet email, sender and recipient addresses, transaction hash, network and direction.', 400);
       }
       try {
@@ -689,28 +699,36 @@ export const handler = router({
       const last4 = String(input.cardLast4 || '');
       const cardType = String(input.cardType || 'Card');
       const cardholderName = String(input.cardholderName || '').trim();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !Number.isFinite(amount) || amount <= 0 || amount > 100000 ||
+      if (!isValidEmail(email) || !Number.isFinite(amount) || amount <= 0 || amount > 100000 ||
           !/^\d{4}$/.test(last4) || !cardholderName || !['Visa', 'Mastercard', 'Virtual card'].includes(cardType)) {
         return error('Enter a valid email, amount and card details using only the final four digits.', 400);
       }
-      const walletId = 'wallet-' + encodeURIComponent(email);
-      const now = new Date().toISOString();
-      const reference = 'DEMO-DEP-' + Date.now().toString(36).toUpperCase();
       try {
-        let [account] = await db.get<Record<string, any>>('spaza_wallet_accounts', [walletId], { consistent: true });
-        if (!account) {
-          await db.tx.add('spaza_wallet_accounts', [{ id: walletId, email, balance: 0, currency: 'ZAR', createdAt: now }]);
-          [account] = await db.get<Record<string, any>>('spaza_wallet_accounts', [walletId], { consistent: true });
-        }
-        if (!account) return error('Demo wallet could not be created.', 503);
-        const updated = { ...account, balance: Number((Number(account.balance || 0) + amount).toFixed(2)), updatedAt: now };
-        const update = db.tx.update('spaza_wallet_accounts', [{ id: walletId, record: updated, if: { balance: account.balance || 0 } }]);
-        const log = db.tx.add('spaza_wallet_transactions', [{ email, type: 'deposit', amount: Number(amount.toFixed(2)), currency: 'ZAR', status: 'Demo completed', method: cardType + ' •••• ' + last4, cardholderName, reference, createdAt: now }]);
-        const [saved, [transactionId]] = await db.transact([update, log]);
-        if (!saved || !transactionId) return error('Wallet balance changed. Reload and retry.', 409);
-        return json({ status: 'Demo completed', balance: updated.balance, reference, message: 'Demo card deposit recorded. No card was charged and no real funds were received.' }, 201);
+        const { shop } = await ensureRlusdDemoAccounts();
+        const value = Number(amount.toFixed(2));
+        const shopBalance = Number(shop.balance || 0);
+        const now = new Date().toISOString();
+        const reference = 'DEMO-CARD-RLUSD-' + Date.now().toString(36).toUpperCase();
+        const update = db.tx.update('spaza_rlusd_demo_wallets', [{
+          id: 'shop',
+          record: { ...shop, balance: Number((shopBalance + value).toFixed(2)), updatedAt: now },
+          if: { balance: shop.balance || 0 },
+        }]);
+        const activity = db.tx.add('spaza_wallet_transactions', [{
+          id: reference, userLabel: 'SmartSpaza Store', email,
+          type: 'card_deposit', amount: value, currency: 'RLUSD',
+          status: 'Completed (Demo)', method: cardType + ' •••• ' + last4,
+          cardholderName, reference, createdAt: now,
+        }]);
+        const [saved, [transactionId]] = await db.transact([update, activity]);
+        if (!saved || !transactionId) return error('Store RLUSD balance changed. Reload and retry.', 409);
+        return json({
+          status: 'Completed (Demo)', balance: Number((shopBalance + value).toFixed(2)),
+          currency: 'RLUSD', reference,
+          message: 'Demo card deposit recorded in the store RLUSD wallet. No card was charged and no real funds or tokens were received.',
+        }, 201);
       } catch {
-        return error('Demo deposit could not be recorded.', 503);
+        return error('Demo card deposit could not be recorded.', 503);
       }
     },
   ],
@@ -754,7 +772,7 @@ export const handler = router({
     async ({ body }) => {
       const input = body as Record<string, unknown>;
       const email = String(input.email || '').trim().toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return error('Enter a valid wallet email.', 400);
+      if (!isValidEmail(email)) return error('Enter a valid wallet email.', 400);
       const sessionId = 'face-demo-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
       const now = Date.now();
       const expiresAt = new Date(now + 5 * 60 * 1000).toISOString();
@@ -841,8 +859,19 @@ export const handler = router({
   'GET /api/suppliers': [
     async () => {
       try {
-        const result = await db.list<Record<string, unknown>>(SUPPLIERS, { limit: 100 });
-        return json(result.items);
+        const result = await db.list<Record<string, any>>(SUPPLIERS, { limit: 100 });
+        const paymentResult = await db.list<Record<string, any>>(SUPPLIER_PAYMENTS, { limit: 200 });
+        const suppliers = await Promise.all(result.items.map(async supplier => {
+          const [wallet] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', ['supplier-' + supplier.id], { consistent: true });
+          return {
+            ...supplier,
+            rlusdBalance: Number(wallet?.balance || 0),
+            rlusdPaymentHistory: paymentResult.items
+              .filter(payment => payment.supplierId === supplier.id && payment.currency === 'RLUSD')
+              .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))),
+          };
+        }));
+        return json(suppliers);
       } catch {
         return error('Supplier list could not be loaded.', 503);
       }
@@ -854,11 +883,14 @@ export const handler = router({
       const name = String(input.name || '').trim();
       const country = String(input.country || '').trim();
       if (name.length < 2 || !country || name.length > 120) return error('Enter a supplier name and country.', 400);
+      const email = String(input.email || '').trim();
+      const phone = String(input.phone || '').trim();
+      if ((email && !isValidEmail(email)) || !isValidInternationalPhone(phone)) return error('Enter a valid supplier email and an international phone number (include country code).', 400);
       const record = {
         name,
         country,
-        email: String(input.email || '').trim(),
-        phone: String(input.phone || '').trim(),
+        email,
+        phone,
         contactName: String(input.contactName || '').trim(),
         bankName: String(input.bankName || '').trim(),
         accountName: String(input.accountName || '').trim(),
@@ -883,13 +915,16 @@ export const handler = router({
       const name = String(input.name || '').trim();
       const country = String(input.country || '').trim();
       if (name.length < 2 || !country) return error('Enter a supplier name and country.', 400);
+      const email = String(input.email || '').trim();
+      const phone = String(input.phone || '').trim();
+      if ((email && !isValidEmail(email)) || !isValidInternationalPhone(phone)) return error('Enter a valid supplier email and an international phone number (include country code).', 400);
       try {
         const [old] = await db.get<Record<string, unknown>>(SUPPLIERS, [params.id], { consistent: true });
         if (!old) return error('Supplier was not found.', 404);
         const record = {
           ...old, name, country,
-          email: String(input.email || '').trim(),
-          phone: String(input.phone || '').trim(),
+          email,
+          phone,
           contactName: String(input.contactName || '').trim(),
           bankName: String(input.bankName || '').trim(),
           accountName: String(input.accountName || '').trim(),
@@ -933,12 +968,65 @@ export const handler = router({
       const amount = Number(input.amount);
       const currency = String(input.currency || 'ZAR').trim().toUpperCase();
       const shopWalletEmail = 'demo.user@example.com';
-      if (!supplierId || !Number.isFinite(amount) || amount <= 0 || amount > 100000 || currency !== 'ZAR') {
-        return error('Demo supplier payments require a supplier, a valid amount and ZAR currency.', 400);
+      if (!supplierId || !Number.isFinite(amount) || amount <= 0 || amount > 100000 || !['ZAR', 'RLUSD'].includes(currency)) {
+        return error('Demo supplier payments require a supplier, a valid amount and ZAR or RLUSD currency.', 400);
       }
       try {
         const [supplier] = await db.get<Record<string, any>>(SUPPLIERS, [supplierId], { consistent: true });
         if (!supplier) return error('Select an existing supplier.', 404);
+        if (currency === 'RLUSD') {
+          const { shop } = await ensureRlusdDemoAccounts();
+          const supplierWalletId = 'supplier-' + supplierId;
+          let [supplierWallet] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', [supplierWalletId], { consistent: true });
+          if (!supplierWallet) {
+            await db.tx.add('spaza_rlusd_demo_wallets', [{
+              id: supplierWalletId,
+              label: String(supplier.name || 'Supplier').trim() + ' RLUSD Demo Account',
+              balance: 0,
+              currency: 'RLUSD',
+              accountType: 'supplier_demo',
+              supplierId,
+              createdAt: new Date().toISOString(),
+            }]);
+            [supplierWallet] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', [supplierWalletId], { consistent: true });
+          }
+          if (!supplierWallet) return error('Supplier RLUSD demo account could not be loaded.', 503);
+          const value = Number(amount.toFixed(2));
+          const shopBalance = Number(shop.balance || 0);
+          const supplierBalance = Number(supplierWallet.balance || 0);
+          if (shopBalance < value) return error('The store demo account has insufficient RLUSD.', 409);
+          const now = new Date().toISOString();
+          const reference = 'SUPP-RLUSD-DEMO-' + Date.now().toString(36).toUpperCase();
+          const storeUpdate = db.tx.update('spaza_rlusd_demo_wallets', [{
+            id: 'shop',
+            record: { ...shop, balance: Number((shopBalance - value).toFixed(2)), updatedAt: now },
+            if: { balance: shop.balance || 0 },
+          }]);
+          const supplierUpdate = db.tx.update('spaza_rlusd_demo_wallets', [{
+            id: supplierWalletId,
+            record: { ...supplierWallet, balance: Number((supplierBalance + value).toFixed(2)), updatedAt: now },
+            if: { balance: supplierWallet.balance || 0 },
+          }]);
+          const payment = db.tx.add(SUPPLIER_PAYMENTS, [{
+            id: reference, supplierId, supplierName: supplier.name,
+            amount: value, currency: 'RLUSD', dueDate: String(input.dueDate || ''),
+            reference: String(input.reference || '').trim() || reference,
+            method: 'Internal SmartSpaza RLUSD demo wallet',
+            status: 'Completed (Demo)', createdAt: now, providerReference: reference,
+          }]);
+          const activity = db.tx.add('spaza_wallet_transactions', [
+            { id: reference + '-OUT', userLabel: 'SmartSpaza Store', type: 'supplier_payment', amount: value, currency: 'RLUSD', status: 'Completed (Demo)', method: 'Store RLUSD demo wallet', recipient: String(supplier.name || 'Supplier'), reference, createdAt: now },
+            { id: reference + '-IN', userLabel: String(supplier.name || 'Supplier'), type: 'supplier_receipt', amount: value, currency: 'RLUSD', status: 'Received (Demo)', method: 'Supplier RLUSD demo wallet', sender: 'SmartSpaza Store', reference, createdAt: now },
+          ]);
+          const [shopSaved, supplierSaved, [paymentId], [outId, inId]] = await db.transact([storeUpdate, supplierUpdate, payment, activity]);
+          if (!shopSaved || !supplierSaved || !paymentId || !outId || !inId) return error('RLUSD supplier demo payment was not committed. Reload both balances and check the transaction history.', 409);
+          return json({
+            id: paymentId, status: 'Completed (Demo)', currency: 'RLUSD',
+            storeBalance: Number((shopBalance - value).toFixed(2)),
+            supplierBalance: Number((supplierBalance + value).toFixed(2)),
+            message: 'RLUSD supplier payment completed in demo mode. The store RLUSD account was debited and the supplier RLUSD account was credited. No real tokens moved.',
+          }, 201);
+        }
         const supplierLabel = String(supplier.name || 'Supplier').trim();
         const supplierEmail = 'supplier-' + supplierId + '@demo.smartspaza';
         const shopWalletId = 'wallet-' + encodeURIComponent(shopWalletEmail);
@@ -1222,7 +1310,7 @@ export const handler = router({
       const country = String(input.country || '').trim();
       const amount = Number(input.amount);
       const requestId = String(input.requestId || '').trim();
-      const emailContact = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient);
+      const emailContact = isValidEmail(recipient);
       const phoneDigits = recipient.replace(/\D/g, '');
       const phoneContact = /^\+?[0-9() .-]{7,20}$/.test(recipient) && phoneDigits.length >= 7 && phoneDigits.length <= 15;
       if (!emailContact && !phoneContact) {

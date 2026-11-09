@@ -248,7 +248,12 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
       });
       setAmount('');
       setFaceSession(null);
-      await loadWallet();
+      if (mode === 'deposit') {
+        await loadRlusdDemoAccount();
+        await loadSharedTransactions();
+      } else {
+        await loadWallet();
+      }
       onNotice(response.data.message);
     } catch (err: any) {
       onNotice(err?.response?.data?.error || 'Wallet transaction failed.');
@@ -286,7 +291,7 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
           Load or create demo wallet
         </button>
         <div className="wallet-balance-card">
-          <span>AVAILABLE DEMO BALANCE</span>
+          <span>PERSONAL ZAR DEMO BALANCE</span>
           <strong>{money(account?.balance || 0)}</strong>
           <small>{account?.email || 'Enter an email to load your wallet'} · ZAR</small>
           <div className="wallet-asset-row"><span>XRPL network</span><b>Testnet demo</b></div>
@@ -328,7 +333,7 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
           <div className="panel-heading"><div><span className="section-kicker">WALLET TRANSFERS</span><h3>Send demo funds to another user</h3></div><ArrowLeftRight size={18} /></div>
           <form className="form-stack" onSubmit={sendDemoTransfer}>
             <label>Recipient wallet email<input type="email" required value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)} placeholder="recipient@example.com" /></label>
-            <label>Amount (ZAR)<input type="number" min="0.01" step="0.01" required value={transferAmount} onChange={e => setTransferAmount(e.target.value)} placeholder="100.00" /></label>
+            <label>Amount ({mode === 'deposit' ? 'RLUSD' : 'ZAR'})<input type="number" min="0.01" step="0.01" required value={transferAmount} onChange={e => setTransferAmount(e.target.value)} placeholder="100.00" /></label>
             <button className="primary-btn full" disabled={busy || !account}>Send demo transfer</button>
             <small>Both wallet balances update together. The sender and recipient each receive a transaction record. Demo ZAR only, no bank or blockchain settlement.</small>
           </form>
@@ -416,7 +421,7 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
             {busy ? 'Processing…' : mode === 'deposit' ? 'Simulate card deposit' : 'Simulate card withdrawal'}
             <CreditCard size={16} />
           </button>
-          <p className="form-footnote">Demo card mode stores only the card brand and last four digits. Never enter a full card number or CVV.</p>
+          <p className="form-footnote">Demo deposits credit the store RLUSD account; withdrawals use the personal ZAR demo wallet. Only the cardholder name and final four digits are recorded. Never enter a full card number or CVV.</p>
         </form>
       </section>
 

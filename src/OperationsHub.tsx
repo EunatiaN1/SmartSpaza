@@ -26,6 +26,8 @@ type Supplier = {
   bankCode?: string;
   mobileWallet?: string;
   xrplAddress?: string;
+  rlusdBalance?: number;
+  rlusdPaymentHistory?: Payment[];
 };
 type OwnerProfile = {
   fullName: string;
@@ -47,6 +49,7 @@ type Payment = {
   reference: string;
   method: string;
   status: string;
+  createdAt?: string;
 };
 const emptyOwner: OwnerProfile = {
   fullName: '', businessName: '', registrationNumber: '', email: '',
@@ -272,7 +275,7 @@ export default function OperationsHub({
         <form className="form-stack ops-form" onSubmit={saveSupplier}>
           <label>Supplier / company name<input required value={supplierForm.name} onChange={e => setSupplierForm({ ...supplierForm, name: e.target.value })} /></label>
           <div className="form-two"><label>Country<select value={supplierForm.country} onChange={e => setSupplierForm({ ...supplierForm, country: e.target.value })}>{PAYMENT_DESTINATIONS.map(c => <option key={c.country}>{c.country}</option>)}</select></label><label>Contact person<input value={supplierForm.contactName} onChange={e => setSupplierForm({ ...supplierForm, contactName: e.target.value })} /></label></div>
-          <label>Phone number, optional<input value={supplierForm.phone} onChange={e => setSupplierForm({ ...supplierForm, phone: e.target.value })} /></label>
+          <div className="form-two"><label>Email address, optional<input type="email" value={supplierForm.email} onChange={e => setSupplierForm({ ...supplierForm, email: e.target.value })} placeholder="supplier@example.com" /></label><label>International phone, optional<input type="tel" value={supplierForm.phone} onChange={e => setSupplierForm({ ...supplierForm, phone: e.target.value })} placeholder="+27 82 123 4567" /></label></div>
           <label>Bank name<input value={supplierForm.bankName} onChange={e => setSupplierForm({ ...supplierForm, bankName: e.target.value })} /></label>
           <div className="form-two"><label>Account name<input value={supplierForm.accountName} onChange={e => setSupplierForm({ ...supplierForm, accountName: e.target.value })} /></label><label>Account number<input value={supplierForm.accountNumber} onChange={e => setSupplierForm({ ...supplierForm, accountNumber: e.target.value })} /></label></div>
           <div className="form-two"><label>Bank / branch code<input value={supplierForm.bankCode} onChange={e => setSupplierForm({ ...supplierForm, bankCode: e.target.value })} /></label><label>Mobile-money number<input value={supplierForm.mobileWallet} onChange={e => setSupplierForm({ ...supplierForm, mobileWallet: e.target.value })} /></label></div>
@@ -282,13 +285,13 @@ export default function OperationsHub({
       </section>
       <section className="panel ops-panel">
         <div className="panel-heading"><div><span className="section-kicker">SUPPLIERS</span><h2>Saved supplier records</h2></div><Building2 size={19} /></div>
-        {suppliers.length ? suppliers.map(s => <div className="ops-row" key={s.id}><div><strong>{s.name}</strong><span>{s.country} · {s.email || s.phone || 'No contact details'}</span></div><button className="icon-btn" onClick={() => beginSupplierEdit(s)} aria-label="Edit supplier"><Pencil size={15} /></button><button className="icon-btn" onClick={() => removeSupplier(s.id)} aria-label="Delete supplier"><Trash2 size={15} /></button></div>) : <div className="empty-inline">No suppliers saved yet.</div>}
+        {suppliers.length ? suppliers.map(s => <div className="ops-row" key={s.id}><div><strong>{s.name}</strong><span>{s.country} · {s.email || s.phone || 'No contact details'}<br />RLUSD demo balance: {Number(s.rlusdBalance || 0).toFixed(2)} RLUSD · {s.rlusdPaymentHistory?.length || 0} RLUSD payments</span><details><summary>View RLUSD payment history</summary>{s.rlusdPaymentHistory?.length ? s.rlusdPaymentHistory.map(payment => <div className="ops-row" key={payment.id}><div><strong>{payment.amount.toFixed(2)} RLUSD</strong><span>{payment.reference} · {payment.status} · {payment.createdAt ? new Date(payment.createdAt).toLocaleString() : 'Date unavailable'}</span></div></div>) : <span>No RLUSD payments recorded.</span>}</details></div><button className="icon-btn" onClick={() => beginSupplierEdit(s)} aria-label="Edit supplier"><Pencil size={15} /></button><button className="icon-btn" onClick={() => removeSupplier(s.id)} aria-label="Delete supplier"><Trash2 size={15} /></button></div>) : <div className="empty-inline">No suppliers saved yet.</div>}
       </section>
       <section className="panel ops-panel">
         <div className="panel-heading"><div><span className="section-kicker">ACCOUNTS PAYABLE</span><h2>Prepare supplier payment</h2></div><CreditCard size={19} /></div>
         <form className="form-stack ops-form" onSubmit={createPayment}>
           <label>Supplier<select required value={paymentForm.supplierId} onChange={e => setPaymentForm({ ...paymentForm, supplierId: e.target.value })}><option value="">Choose supplier</option>{suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-          <div className="form-two"><label>Amount<input type="number" min="0.01" step="0.01" required value={paymentForm.amount} onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })} /></label><label>Currency<input maxLength={3} required value={paymentForm.currency} onChange={e => setPaymentForm({ ...paymentForm, currency: e.target.value.toUpperCase() })} /></label></div>
+          <div className="form-two"><label>Amount<input type="number" min="0.01" step="0.01" required value={paymentForm.amount} onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })} /></label><label>Currency<select required value={paymentForm.currency} onChange={e => setPaymentForm({ ...paymentForm, currency: e.target.value })}><option value="ZAR">ZAR</option><option value="RLUSD">RLUSD</option></select></label></div>
           <div className="form-two"><label>Due date<input type="date" value={paymentForm.dueDate} onChange={e => setPaymentForm({ ...paymentForm, dueDate: e.target.value })} /></label><label>Payment method<select value={paymentForm.method} onChange={e => setPaymentForm({ ...paymentForm, method: e.target.value })}><option>Bank transfer</option><option>Mobile money</option><option>XRPL wallet</option></select></label></div>
           <label>Invoice / payment reference<input value={paymentForm.reference} onChange={e => setPaymentForm({ ...paymentForm, reference: e.target.value })} /></label>
           <button className="primary-btn" disabled={busy || !suppliers.length}>{busy ? 'Paying…' : 'Pay supplier from demo shop account'}</button>
