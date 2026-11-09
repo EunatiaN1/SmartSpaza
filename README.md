@@ -17,7 +17,7 @@ Features
 · Retail inventory & expiry markdown workflows — keep shelves honest and waste low.
 · Sales & shop performance reporting — see how the shop is actually doing.
 · Supplier management & demo supplier payments — organise the people behind the products.
-· Internal RLUSD demo transfers & funding flows — explore stablecoin-style flows safely.
+· Internal RLUSD demo transfers, store card deposits and supplier payments — explore stablecoin-style flows safely.\n· Separate supplier RLUSD demo balances and paired payment history — reconcile store debits with supplier credits.
 · XRPL public-address lookup — with a separate on-chain balance display.
 · South African language catalogue & interface bundles — because local means local.
 · Demo transaction history & payment status records — follow the money (the demo money, that is).
@@ -29,7 +29,7 @@ Demo and security boundaries
 Read these carefully — they define what this project is and is not:
 
 · Internal demo RLUSD balances are database ledger entries, not real RLUSD tokens.
-· Demo card deposits do not charge a bank card or move real money.
+· Demo card deposits credit the internal store RLUSD ledger only; they do not charge a bank card or move real money. Only a cardholder name and final four digits are retained.
 · Real XRPL settlement requires a secure wallet signer, verified wallet ownership, a funded account, an RLUSD trust line, and validated ledger checks.
 · Never commit seed phrases, private keys, API secrets, access tokens, card numbers, or CVVs.
 · Biometric approval in a demo flow is not proof of biometric identity verification.
