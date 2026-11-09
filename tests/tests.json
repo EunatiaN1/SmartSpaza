@@ -77,5 +77,67 @@
       "Save the shop wallet"
     ],
     "expected": "The store demo account shows Available and its balance. A demo deposit debits the funding pool and credits the store. On-chain balance and trust-line status remain separate."
+  },
+  {
+    "name": "Supplier RLUSD demo payment reconciliation",
+    "viewport": "desktop",
+    "covers": [
+      "supplier RLUSD wallet creation",
+      "store RLUSD debit",
+      "supplier RLUSD credit",
+      "payment history",
+      "paired transaction history",
+      "insufficient balance rejection"
+    ],
+    "description": "Verifies a supplier payment in RLUSD debits the store RLUSD demo ledger and credits the selected supplier's separate RLUSD demo ledger.",
+    "steps": [
+      "Open Wallet and add demo RLUSD funding to the store account",
+      "Open Suppliers and select an existing supplier",
+      "Choose RLUSD as the payment currency",
+      "Enter an amount within the available store RLUSD balance",
+      "Complete the demo supplier payment",
+      "Review the supplier's displayed RLUSD balance and payment history and the shared transaction feed"
+    ],
+    "expected": "The store RLUSD balance decreases by the payment amount, the supplier RLUSD balance increases by the same amount, the supplier payment history records the RLUSD payment, and the shared activity feed contains matching debit and credit records. No real tokens move."
+  },
+  {
+    "name": "International supplier contact validation",
+    "viewport": "mobile",
+    "covers": [
+      "valid supplier email",
+      "international E.164 phone formats",
+      "optional contact fields",
+      "invalid email rejection",
+      "invalid phone rejection"
+    ],
+    "description": "Checks that supplier contact details accept normal email addresses and international phone numbers with optional plus signs, spaces, brackets or hyphens.",
+    "steps": [
+      "Create a supplier with email Glen@gmail.com and phone +27 82 123 4567",
+      "Save the supplier",
+      "Edit the supplier and try an invalid email",
+      "Try a phone number with too few digits"
+    ],
+    "expected": "The valid contact details are accepted. Invalid non-empty email addresses and invalid international phone numbers are rejected with a clear validation message."
+  },
+  {
+    "name": "Demo card deposit credits store RLUSD ledger",
+    "viewport": "desktop",
+    "covers": [
+      "cardholder name only",
+      "last four card digits only",
+      "store RLUSD credit",
+      "RLUSD transaction history",
+      "no real card charge"
+    ],
+    "description": "Verifies the demo card deposit increases the store RLUSD ledger and is recorded as an RLUSD transaction without storing full card data.",
+    "steps": [
+      "Open Wallet",
+      "Load the wallet screen",
+      "Choose demo card deposit",
+      "Enter the cardholder name, card type, final four digits and amount",
+      "Submit the demo deposit",
+      "Review store RLUSD balance and transaction history"
+    ],
+    "expected": "The store RLUSD demo balance increases by the entered amount and the shared history records an RLUSD card_deposit entry. Only the cardholder name and final four digits are retained; no card is charged."
   }
 ]
