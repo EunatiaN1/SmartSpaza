@@ -64,6 +64,16 @@ const RLUSD_ISSUER_MAINNET = 'rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De';
 const RLUSD_CURRENCY = '524C555344000000000000000000000000000000';
 const DEFAULT_FX_URL = 'https://open.er-api.com/v6/latest/USD';
 
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function isValidInternationalPhone(value: string) {
+  if (!value.trim()) return true;
+  const compact = value.trim().replace(/[\s().-]/g, '');
+  return /^\+?[1-9]\d{6,14}$/.test(compact);
+}
+
 
 function isoDate(daysAgo = 0) {
   const date = new Date();
@@ -854,11 +864,14 @@ export const handler = router({
       const name = String(input.name || '').trim();
       const country = String(input.country || '').trim();
       if (name.length < 2 || !country || name.length > 120) return error('Enter a supplier name and country.', 400);
+      const email = String(input.email || '').trim();
+      const phone = String(input.phone || '').trim();
+      if ((email && !isValidEmail(email)) || !isValidInternationalPhone(phone)) return error('Enter a valid supplier email and an international phone number (include country code).', 400);
       const record = {
         name,
         country,
-        email: String(input.email || '').trim(),
-        phone: String(input.phone || '').trim(),
+        email,
+        phone,
         contactName: String(input.contactName || '').trim(),
         bankName: String(input.bankName || '').trim(),
         accountName: String(input.accountName || '').trim(),
@@ -883,13 +896,16 @@ export const handler = router({
       const name = String(input.name || '').trim();
       const country = String(input.country || '').trim();
       if (name.length < 2 || !country) return error('Enter a supplier name and country.', 400);
+      const email = String(input.email || '').trim();
+      const phone = String(input.phone || '').trim();
+      if ((email && !isValidEmail(email)) || !isValidInternationalPhone(phone)) return error('Enter a valid supplier email and an international phone number (include country code).', 400);
       try {
         const [old] = await db.get<Record<string, unknown>>(SUPPLIERS, [params.id], { consistent: true });
         if (!old) return error('Supplier was not found.', 404);
         const record = {
           ...old, name, country,
-          email: String(input.email || '').trim(),
-          phone: String(input.phone || '').trim(),
+          email,
+          phone,
           contactName: String(input.contactName || '').trim(),
           bankName: String(input.bankName || '').trim(),
           accountName: String(input.accountName || '').trim(),
@@ -933,12 +949,65 @@ export const handler = router({
       const amount = Number(input.amount);
       const currency = String(input.currency || 'ZAR').trim().toUpperCase();
       const shopWalletEmail = 'demo.user@example.com';
-      if (!supplierId || !Number.isFinite(amount) || amount <= 0 || amount > 100000 || currency !== 'ZAR') {
-        return error('Demo supplier payments require a supplier, a valid amount and ZAR currency.', 400);
+      if (!supplierId || !Number.isFinite(amount) || amount <= 0 || amount > 100000 || !['ZAR', 'RLUSD'].includes(currency)) {
+        return error('Demo supplier payments require a supplier, a valid amount and ZAR or RLUSD currency.', 400);
       }
       try {
         const [supplier] = await db.get<Record<string, any>>(SUPPLIERS, [supplierId], { consistent: true });
         if (!supplier) return error('Select an existing supplier.', 404);
+        if (currency === 'RLUSD') {
+          const { shop } = await ensureRlusdDemoAccounts();
+          const supplierWalletId = 'supplier-' + supplierId;
+          let [supplierWallet] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', [supplierWalletId], { consistent: true });
+          if (!supplierWallet) {
+            await db.tx.add('spaza_rlusd_demo_wallets', [{
+              id: supplierWalletId,
+              label: String(supplier.name || 'Supplier').trim() + ' RLUSD Demo Account',
+              balance: 0,
+              currency: 'RLUSD',
+              accountType: 'supplier_demo',
+              supplierId,
+              createdAt: new Date().toISOString(),
+            }]);
+            [supplierWallet] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', [supplierWalletId], { consistent: true });
+          }
+          if (!supplierWallet) return error('Supplier RLUSD demo account could not be loaded.', 503);
+          const value = Number(amount.toFixed(2));
+          const shopBalance = Number(shop.balance || 0);
+          const supplierBalance = Number(supplierWallet.balance || 0);
+          if (shopBalance < value) return error('The store demo account has insufficient RLUSD.', 409);
+          const now = new Date().toISOString();
+          const reference = 'SUPP-RLUSD-DEMO-' + Date.now().toString(36).toUpperCase();
+          const storeUpdate = db.tx.update('spaza_rlusd_demo_wallets', [{
+            id: 'shop',
+            record: { ...shop, balance: Number((shopBalance - value).toFixed(2)), updatedAt: now },
+            if: { balance: shop.balance || 0 },
+          }]);
+          const supplierUpdate = db.tx.update('spaza_rlusd_demo_wallets', [{
+            id: supplierWalletId,
+            record: { ...supplierWallet, balance: Number((supplierBalance + value).toFixed(2)), updatedAt: now },
+            if: { balance: supplierWallet.balance || 0 },
+          }]);
+          const payment = db.tx.add(SUPPLIER_PAYMENTS, [{
+            id: reference, supplierId, supplierName: supplier.name,
+            amount: value, currency: 'RLUSD', dueDate: String(input.dueDate || ''),
+            reference: String(input.reference || '').trim() || reference,
+            method: 'Internal SmartSpaza RLUSD demo wallet',
+            status: 'Completed (Demo)', createdAt: now, providerReference: reference,
+          }]);
+          const activity = db.tx.add('spaza_wallet_transactions', [
+            { id: reference + '-OUT', userLabel: 'SmartSpaza Store', type: 'supplier_payment', amount: value, currency: 'RLUSD', status: 'Completed (Demo)', method: 'Store RLUSD demo wallet', recipient: String(supplier.name || 'Supplier'), reference, createdAt: now },
+            { id: reference + '-IN', userLabel: String(supplier.name || 'Supplier'), type: 'supplier_receipt', amount: value, currency: 'RLUSD', status: 'Received (Demo)', method: 'Supplier RLUSD demo wallet', sender: 'SmartSpaza Store', reference, createdAt: now },
+          ]);
+          const [shopSaved, supplierSaved, [paymentId], [outId, inId]] = await db.transact([storeUpdate, supplierUpdate, payment, activity]);
+          if (!shopSaved || !supplierSaved || !paymentId || !outId || !inId) return error('RLUSD supplier demo payment was not committed. Reload both balances and check the transaction history.', 409);
+          return json({
+            id: paymentId, status: 'Completed (Demo)', currency: 'RLUSD',
+            storeBalance: Number((shopBalance - value).toFixed(2)),
+            supplierBalance: Number((supplierBalance + value).toFixed(2)),
+            message: 'RLUSD supplier payment completed in demo mode. The store RLUSD account was debited and the supplier RLUSD account was credited. No real tokens moved.',
+          }, 201);
+        }
         const supplierLabel = String(supplier.name || 'Supplier').trim();
         const supplierEmail = 'supplier-' + supplierId + '@demo.smartspaza';
         const shopWalletId = 'wallet-' + encodeURIComponent(shopWalletEmail);
