@@ -248,7 +248,12 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
       });
       setAmount('');
       setFaceSession(null);
-      await loadWallet();
+      if (mode === 'deposit') {
+        await loadRlusdDemoAccount();
+        await loadSharedTransactions();
+      } else {
+        await loadWallet();
+      }
       onNotice(response.data.message);
     } catch (err: any) {
       onNotice(err?.response?.data?.error || 'Wallet transaction failed.');
@@ -286,7 +291,7 @@ export default function WalletHub({ onNotice }: { onNotice: (message: string) =>
           Load or create demo wallet
         </button>
         <div className="wallet-balance-card">
-          <span>AVAILABLE DEMO BALANCE</span>
+          <span>PERSONAL ZAR DEMO BALANCE</span>
           <strong>{money(account?.balance || 0)}</strong>
           <small>{account?.email || 'Enter an email to load your wallet'} · ZAR</small>
           <div className="wallet-asset-row"><span>XRPL network</span><b>Testnet demo</b></div>
