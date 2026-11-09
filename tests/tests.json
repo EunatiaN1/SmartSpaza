@@ -40,104 +40,56 @@
     "expected": "Each period displays its date range, revenue, stock costs, gross profit, margin and recorded sales count."
   },
   {
-    "name": "Supplier payment without email",
+    "name": "Supplier payments and international contact validation",
     "viewport": "mobile",
     "covers": [
       "supplier creation without email",
-      "supplier payment",
-      "shop demo wallet debit",
-      "supplier demo balance credit"
-    ],
-    "description": "Verifies supplier payments complete in demo mode without supplier email details.",
-    "steps": [
-      "Add a supplier using a name and country only",
-      "Choose the supplier in Accounts Payable",
-      "Enter a ZAR amount",
-      "Pay from the demo shop account"
-    ],
-    "expected": "The supplier payment completes immediately and records both sides without an email address or approval queue."
-  },
-  {
-    "name": "Store RLUSD demo deposit and on-chain account status",
-    "viewport": "desktop",
-    "covers": [
-      "store RLUSD account address",
-      "network selection",
-      "available store demo RLUSD balance",
-      "demo funding pool debit",
-      "store demo balance credit",
-      "separate on-chain RLUSD trust-line balance",
-      "private key not requested"
-    ],
-    "description": "Verifies a connected store XRPL address displays its validated RLUSD trust-line balance and deposit destination.",
-    "steps": [
-      "Open Wallet",
-      "Enter a public XRPL address",
-      "Select Testnet or Mainnet",
-      "Save the shop wallet"
-    ],
-    "expected": "The store demo account shows Available and its balance. A demo deposit debits the funding pool and credits the store. On-chain balance and trust-line status remain separate."
-  },
-  {
-    "name": "Supplier RLUSD demo payment reconciliation",
-    "viewport": "desktop",
-    "covers": [
+      "international email validation",
+      "international phone validation",
+      "supplier ZAR payment",
       "supplier RLUSD wallet creation",
       "store RLUSD debit",
       "supplier RLUSD credit",
-      "payment history",
-      "paired transaction history",
-      "insufficient balance rejection"
+      "supplier payment history",
+      "paired transaction history"
     ],
-    "description": "Verifies a supplier payment in RLUSD debits the store RLUSD demo ledger and credits the selected supplier's separate RLUSD demo ledger.",
+    "description": "Verifies supplier contacts accept valid international formats and supplier payments in ZAR and RLUSD reconcile both sides of the appropriate demo ledger.",
     "steps": [
-      "Open Wallet and add demo RLUSD funding to the store account",
-      "Open Suppliers and select an existing supplier",
-      "Choose RLUSD as the payment currency",
-      "Enter an amount within the available store RLUSD balance",
-      "Complete the demo supplier payment",
-      "Review the supplier's displayed RLUSD balance and payment history and the shared transaction feed"
+      "Add a supplier using a name and country only",
+      "Edit the supplier and save email Glen@gmail.com and international phone +27 82 123 4567",
+      "Try an invalid email and an invalid short phone number and confirm validation rejects them",
+      "Choose the supplier in Accounts Payable and pay a ZAR amount from the demo shop account",
+      "Open Wallet and deposit demo RLUSD into the store account",
+      "Choose RLUSD as the supplier payment currency and complete a payment within the available store RLUSD balance",
+      "Review the supplier's RLUSD balance and payment history and the shared transaction feed"
     ],
-    "expected": "The store RLUSD balance decreases by the payment amount, the supplier RLUSD balance increases by the same amount, the supplier payment history records the RLUSD payment, and the shared activity feed contains matching debit and credit records. No real tokens move."
+    "expected": "Valid supplier contact details are accepted and invalid ones are rejected. The ZAR and RLUSD demo payments each debit the correct store ledger and credit the supplier's matching ledger. The supplier RLUSD balance and payment history reflect the RLUSD payment, with paired debit and credit records in the shared activity feed. No real bank or blockchain funds move."
   },
   {
-    "name": "International supplier contact validation",
-    "viewport": "mobile",
-    "covers": [
-      "valid supplier email",
-      "international E.164 phone formats",
-      "optional contact fields",
-      "invalid email rejection",
-      "invalid phone rejection"
-    ],
-    "description": "Checks that supplier contact details accept normal email addresses and international phone numbers with optional plus signs, spaces, brackets or hyphens.",
-    "steps": [
-      "Create a supplier with email Glen@gmail.com and phone +27 82 123 4567",
-      "Save the supplier",
-      "Edit the supplier and try an invalid email",
-      "Try a phone number with too few digits"
-    ],
-    "expected": "The valid contact details are accepted. Invalid non-empty email addresses and invalid international phone numbers are rejected with a clear validation message."
-  },
-  {
-    "name": "Demo card deposit credits store RLUSD ledger",
+    "name": "Store RLUSD deposits and on-chain account status",
     "viewport": "desktop",
     "covers": [
-      "cardholder name only",
-      "last four card digits only",
-      "store RLUSD credit",
-      "RLUSD transaction history",
-      "no real card charge"
+      "store XRPL account address",
+      "network selection",
+      "store RLUSD demo balance",
+      "demo funding pool debit",
+      "store demo balance credit",
+      "card deposit credits RLUSD store wallet",
+      "cardholder name and final four only",
+      "card deposit transaction history",
+      "separate on-chain RLUSD trust-line balance",
+      "private key not requested"
     ],
-    "description": "Verifies the demo card deposit increases the store RLUSD ledger and is recorded as an RLUSD transaction without storing full card data.",
+    "description": "Verifies both internal funding-pool and demo card deposits credit the store RLUSD ledger, are recorded in activity history, and remain separate from on-chain balances.",
     "steps": [
       "Open Wallet",
-      "Load the wallet screen",
-      "Choose demo card deposit",
-      "Enter the cardholder name, card type, final four digits and amount",
-      "Submit the demo deposit",
-      "Review store RLUSD balance and transaction history"
+      "Enter a public XRPL address and select Testnet or Mainnet, then save the shop wallet",
+      "Record a demo RLUSD deposit from the funding pool",
+      "Enter a wallet email, cardholder name, card brand, final four digits and a demo deposit amount",
+      "Submit the demo card deposit",
+      "Review the store RLUSD balance and shared transaction history",
+      "Confirm the on-chain RLUSD balance and trust-line status remain separate"
     ],
-    "expected": "The store RLUSD demo balance increases by the entered amount and the shared history records an RLUSD card_deposit entry. Only the cardholder name and final four digits are retained; no card is charged."
+    "expected": "The funding pool is debited and store demo RLUSD credited for the pool deposit. The demo card deposit also credits the store RLUSD ledger and appears as an RLUSD card_deposit transaction. Only cardholder name and last four digits are stored; no card is charged. On-chain balance and trust-line status remain separate."
   }
 ]
