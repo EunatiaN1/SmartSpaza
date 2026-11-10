@@ -432,36 +432,41 @@ export const handler = router({
       try {
         await ensureSeeded();
         const period = String(query?.period || 'week');
-        const now = new Date();
-        const start = new Date(now);
-        const end = new Date(now);
+        const todayKey = southAfricaDate(new Date());
+        const [year, month, day] = todayKey.split('-').map(Number);
+        const today = new Date(Date.UTC(year, month - 1, day));
+        const start = new Date(today);
+        const end = new Date(today);
         if (period === 'week') {
-          start.setDate(now.getDate() - 6);
-          start.setHours(0, 0, 0, 0);
+          const mondayOffset = (today.getUTCDay() + 6) % 7;
+          start.setUTCDate(today.getUTCDate() - mondayOffset);
+          end.setTime(start.getTime());
+          end.setUTCDate(start.getUTCDate() + 6);
         } else if (period === 'lastMonth') {
-          start.setDate(1);
-          start.setMonth(start.getMonth() - 1);
-          start.setHours(0, 0, 0, 0);
-          end.setDate(0);
-          end.setHours(23, 59, 59, 999);
+          start.setUTCDate(1);
+          start.setUTCMonth(start.getUTCMonth() - 1);
+          end.setUTCDate(0);
         } else if (period === 'thisMonth') {
-          start.setDate(1);
-          start.setHours(0, 0, 0, 0);
+          start.setUTCDate(1);
+          end.setUTCDate(new Date(Date.UTC(year, month, 0)).getUTCDate());
         } else {
           return error('Choose week, lastMonth or thisMonth.', 400);
         }
+        const dateKey = (value: Date) => value.toISOString().slice(0, 10);
+        const startDate = dateKey(start);
+        const endDate = dateKey(end);
         const sales = await db.list<Sale>(SALES, { limit: 5000 });
         const rows = sales.items.filter(sale => {
           if (!(sale as any).saleId) return false;
-          const date = new Date(String(sale.date) + 'T12:00:00');
-          return date >= start && date <= end;
+          const businessDate = southAfricaDate(String((sale as any).createdAt || sale.date));
+          return businessDate >= startDate && businessDate <= endDate;
         });
         const revenue = rows.reduce((sum, sale) => sum + Number(sale.revenue || 0), 0);
         const costs = rows.reduce((sum, sale) => sum + Number(sale.cost || 0), 0);
         return json({
           period,
-          startDate: start.toISOString().slice(0, 10),
-          endDate: end.toISOString().slice(0, 10),
+          startDate: dateKey(start),
+          endDate: dateKey(end),
           revenue: Number(revenue.toFixed(2)),
           costs: Number(costs.toFixed(2)),
           profit: Number((revenue - costs).toFixed(2)),
