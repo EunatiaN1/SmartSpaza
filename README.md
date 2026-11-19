@@ -119,7 +119,7 @@ SmartSpaza is a web-based application. Its implementation may include:
 - **Digital asset demonstration:** RLUSD.
 - **Deployment:** AppDeploy.
 
-The exact implementation and available integrations may evolve as the project develops. Refer to the application source code and configuration for the current technical details.
+The repository currently uses React, React DOM, Vite, TypeScript, Tailwind CSS, and Lucide React. See [package.json](package.json) for the dependency list and available scripts. The implementation may evolve as the project develops.
 
 ## Getting Started
 
