@@ -75,6 +75,11 @@ function isValidInternationalPhone(value: string) {
 }
 
 
+function southAfricaDate(value: string | Date = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+}
+
 function isoDate(daysAgo = 0) {
   const date = new Date();
   date.setDate(date.getDate() - daysAgo);
@@ -121,12 +126,12 @@ async function ensureSeeded() {
 
 async function applyExpiryDiscounts() {
   const result = await db.list<Product>(INVENTORY, { limit: 100 });
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = southAfricaDate();
+  const todayUtc = Date.parse(today + 'T00:00:00.000Z');
   const updates: Array<{ id: string; record: Record<string, unknown> }> = [];
   for (const item of result.items) {
-    const expiryDate = new Date(item.expiry + 'T00:00:00');
-    const daysRemaining = Math.floor((expiryDate.getTime() - today.getTime()) / 86400000);
+    const expiryUtc = Date.parse(item.expiry + 'T00:00:00.000Z');
+    const daysRemaining = Math.round((expiryUtc - todayUtc) / 86400000);
     const originalPrice = Number(item.originalPrice ?? item.price);
     const eligible = Number(item.stock) > 0 && daysRemaining >= 0 && daysRemaining <= 7;
     if (eligible) {
@@ -148,7 +153,7 @@ async function dashboardData() {
   await applyExpiryDiscounts();
   const [inventory, sales, transfers] = await Promise.all([
     db.list<Product>(INVENTORY, { limit: 100 }),
-    db.list<Sale>(SALES, { limit: 500 }),
+    db.list<Sale>(SALES, { limit: 5000 }),
     db.list<Transfer>(TRANSFERS, { limit: 50 }),
   ]);
   // Only completed, itemised POS sales count as real recorded sales. Older generated
@@ -194,32 +199,82 @@ async function getFxRates() {
   const url = await secretValue('FX_ORACLE_URL', DEFAULT_FX_URL);
   const apiKey = await secretValue('FX_ORACLE_API_KEY');
   const refreshUrl = url + (url.includes('?') ? '&' : '?') + '_refresh=' + Date.now();
-  const response = await fetch(refreshUrl, {
-    headers: apiKey
-      ? { authorization: 'Bearer ' + apiKey, 'x-api-key': apiKey, accept: 'application/json', 'cache-control': 'no-cache' }
-      : { accept: 'application/json', 'cache-control': 'no-cache' },
-  });
-  if (!response.ok) throw new Error('Exchange-rate provider returned an error.');
-  const payload = await response.json() as {
-    rates?: Record<string, number>;
-    conversion_rates?: Record<string, number>;
-    base_code?: string;
-    time_last_update_utc?: string;
-    time_last_update_unix?: number;
-    result?: string;
-  };
-  const rates = payload.rates || payload.conversion_rates;
-  if (!rates || !Number(rates.ZAR)) {
-    throw new Error('Exchange-rate response must include a ZAR reference rate.');
+  let primaryError = 'Exchange-rate provider returned an error.';
+  try {
+    const response = await fetch(refreshUrl, {
+      headers: apiKey
+        ? { authorization: 'Bearer ' + apiKey, 'x-api-key': apiKey, accept: 'application/json', 'cache-control': 'no-cache' }
+        : { accept: 'application/json', 'cache-control': 'no-cache' },
+    });
+    if (!response.ok) throw new Error(primaryError);
+    const payload = await response.json() as {
+      rates?: Record<string, number>;
+      conversion_rates?: Record<string, number>;
+      base_code?: string;
+      time_last_update_utc?: string;
+      time_last_update_unix?: number;
+      result?: string;
+    };
+    const providerRates = payload.rates || payload.conversion_rates;
+    if (!providerRates) throw new Error('Primary exchange-rate response has no currency rates.');
+    const providerBase = String(payload.base_code || 'USD').toUpperCase();
+    const usdPerBase = providerBase === 'USD' ? 1 : Number(providerRates.USD);
+    if (!Number.isFinite(usdPerBase) || usdPerBase <= 0) {
+      throw new Error('Primary exchange-rate response cannot be normalized to USD.');
+    }
+    const rates: Record<string, number> = {};
+    for (const [code, rawValue] of Object.entries(providerRates)) {
+      const value = Number(rawValue);
+      if (Number.isFinite(value) && value > 0) {
+        rates[code.toUpperCase()] = value / usdPerBase;
+      }
+    }
+    rates.USD = 1;
+    if (!Number.isFinite(rates.ZAR) || rates.ZAR <= 0) {
+      throw new Error('Primary exchange-rate response has no usable ZAR rate.');
+    }
+    const timestamp = payload.time_last_update_unix
+      ? new Date(payload.time_last_update_unix * 1000).toISOString()
+      : payload.time_last_update_utc || '';
+    const parsedTimestamp = Date.parse(timestamp);
+    const age = Number.isFinite(parsedTimestamp) ? Date.now() - parsedTimestamp : Infinity;
+    if (Number.isFinite(age) && age >= 0 && age <= 24 * 60 * 60 * 1000) {
+      return { rates, timestamp: new Date(parsedTimestamp).toISOString(), base: 'USD', provider: 'ExchangeRate-API' };
+    }
+    primaryError = 'The primary exchange-rate feed is stale.';
+  } catch (err) {
+    primaryError = err instanceof Error ? err.message : primaryError;
   }
-  const timestamp = payload.time_last_update_unix
-    ? new Date(payload.time_last_update_unix * 1000).toISOString()
-    : payload.time_last_update_utc || new Date().toISOString();
-  const age = Date.now() - new Date(timestamp).getTime();
-  if (Number.isFinite(age) && age > 24 * 60 * 60 * 1000) {
-    throw new Error('Exchange-rate data is older than 24 hours. Refresh the provider data.');
+
+  // Secondary daily USD reference feed. Accept only a dated, recent response.
+  try {
+    const fallbackUrl = 'https://latest.currency-api.pages.dev/v1/currencies/usd.json?_refresh=' + Date.now();
+    const fallbackResponse = await fetch(fallbackUrl, {
+      headers: { accept: 'application/json', 'cache-control': 'no-cache' },
+    });
+    if (!fallbackResponse.ok) throw new Error('Secondary exchange-rate provider returned an error.');
+    const fallbackPayload = await fallbackResponse.json() as { date?: string; usd?: Record<string, number> };
+    const date = String(fallbackPayload.date || '');
+    const usd = fallbackPayload.usd;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !usd || !Number(usd.zar)) {
+      throw new Error('Secondary exchange-rate response is missing its date or ZAR rate.');
+    }
+    const timestamp = new Date(date + 'T00:00:00.000Z').toISOString();
+    const age = Date.now() - new Date(timestamp).getTime();
+    if (!Number.isFinite(age) || age < 0 || age > 72 * 60 * 60 * 1000) {
+      throw new Error('Secondary exchange-rate data is older than 72 hours.');
+    }
+    const rates: Record<string, number> = {};
+    for (const [code, value] of Object.entries(usd)) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) rates[code.toUpperCase()] = numeric;
+    }
+    rates.USD = 1;
+    return { rates, timestamp, base: 'USD', provider: 'Currency-API secondary feed' };
+  } catch (fallbackError) {
+    const detail = fallbackError instanceof Error ? fallbackError.message : 'Secondary exchange-rate feed failed.';
+    throw new Error('No recent exchange-rate data is available. ' + primaryError + ' ' + detail);
   }
-  return { rates, timestamp, base: payload.base_code || 'USD' };
 }
 
 async function verifyPaymentAccounts(sourceAddress: string, destinationAddress: string, amount: number) {
@@ -282,7 +337,7 @@ export const expiryMarkdownHandler = async (_event: { type: 'cron'; name: string
     return { statusCode: 200 };
   } catch (err) {
     console.error('Expiry markdown job failed', err);
-    return { statusCode: 200 };
+    return { statusCode: 500 };
   }
 };
 
@@ -327,11 +382,11 @@ export const handler = router({
   'GET /api/sales': [
     async () => {
       try {
-        const result = await db.list<Record<string, any>>(SALES, { limit: 500 });
+        const result = await db.list<Record<string, any>>(SALES, { limit: 5000 });
         const rows = result.items
           .filter(sale => Boolean(sale.saleId))
           .sort((a, b) => String(b.createdAt || b.date).localeCompare(String(a.createdAt || a.date)))
-          .slice(0, 100);
+          .slice(0, 5000);
         return json(rows);
       } catch {
         return error('Sales history could not be loaded.', 503);
@@ -367,6 +422,8 @@ export const handler = router({
         const stockUpdates = ids.map((id, index) => {
           const product = products[index]!;
           const quantity = quantities.get(id)!;
+          if (product.expiry <= southAfricaDate(now)) throw new Error('EXPIRED_PRODUCT:' + product.name);
+          if (product.expiry <= southAfricaDate()) throw new Error('EXPIRED_PRODUCT:' + product.name);
           if (Number(product.stock) < quantity) throw new Error('INSUFFICIENT_STOCK:' + product.name);
           const unitPrice = Number(product.price);
           const unitCost = Number(product.cost);
@@ -387,7 +444,7 @@ export const handler = router({
           }], { patch: true });
         });
         const sale = {
-          saleId: requestId, date: now.slice(0, 10), createdAt: now,
+          saleId: requestId, date: southAfricaDate(now), createdAt: now,
           items: saleLines, revenue: Number(revenue.toFixed(2)),
           cost: Number(cost.toFixed(2)), profit: Number((revenue - cost).toFixed(2)),
           margin: revenue > 0 ? Number((((revenue - cost) / revenue) * 100).toFixed(2)) : 0,
@@ -401,6 +458,7 @@ export const handler = router({
         return json({ ...sale, message: 'Sale recorded. Stock updated and gross profit added to your reports.' }, 201);
       } catch (err) {
         const message = err instanceof Error ? err.message : '';
+        if (message.startsWith('EXPIRED_PRODUCT:')) return error(message.replace('EXPIRED_PRODUCT:', '') + ' has reached its expiry date and cannot be sold. Record a disposal instead.', 409);
         if (message.startsWith('INSUFFICIENT_STOCK:')) return error(message.replace('INSUFFICIENT_STOCK:', '') + ' does not have enough stock for this sale.', 409);
         if (message.startsWith('INVALID_PRODUCT:')) return error('Invalid selling price or unit cost for ' + message.replace('INVALID_PRODUCT:', '') + '.', 400);
         console.error('POS checkout failed', err);
@@ -465,8 +523,8 @@ export const handler = router({
         const costs = rows.reduce((sum, sale) => sum + Number(sale.cost || 0), 0);
         return json({
           period,
-          startDate: dateKey(start),
-          endDate: dateKey(end),
+          startDate: start.toISOString().slice(0, 10),
+          endDate: end.toISOString().slice(0, 10),
           revenue: Number(revenue.toFixed(2)),
           costs: Number(costs.toFixed(2)),
           profit: Number((revenue - costs).toFixed(2)),
@@ -485,9 +543,9 @@ export const handler = router({
       try {
         const [wallet] = await db.get<Record<string, any>>('spaza_shop_wallet', ['shop'], { consistent: true });
         if (!wallet?.address) {
-          return json({ address: '', network: 'mainnet', balanceXrp: null, rlusdBalance: null, trustLineActive: false, configured: false });
+          return json({ address: '', network: 'testnet', balanceXrp: null, rlusdBalance: null, trustLineActive: false, configured: false });
         }
-        const network = wallet.network === 'mainnet' ? 'mainnet' : 'testnet';
+        const network = 'testnet';
         const issuer = network === 'mainnet'
           ? RLUSD_ISSUER_MAINNET
           : await secretValue('XRPL_RLUSD_ISSUER', RLUSD_ISSUER_TESTNET);
@@ -534,9 +592,9 @@ export const handler = router({
     async ({ body }) => {
       const input = body as Record<string, unknown>;
       const address = String(input.address || '').trim();
-      const network = String(input.network || 'testnet');
-      if (!/^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(address) || !['testnet', 'mainnet'].includes(network)) {
-        return error('Enter a valid public XRPL address and select a network.', 400);
+      const network = 'testnet';
+      if (!/^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(address)) {
+        return error('Enter a valid public XRPL Testnet address.', 400);
       }
       try {
         const record = { address, network, updatedAt: new Date().toISOString() };
@@ -707,10 +765,11 @@ export const handler = router({
       const senderEmail = String(input.email || '').trim().toLowerCase();
       const recipientEmail = String(input.recipientEmail || '').trim().toLowerCase();
       const amount = Number(input.amount);
+      const currency = String(input.currency || 'ZAR').trim().toUpperCase();
       const requestId = String(input.requestId || '').trim();
       const validEmail = isValidEmail;
-      if (!validEmail(senderEmail) || !validEmail(recipientEmail) || senderEmail === recipientEmail || !Number.isFinite(amount) || amount <= 0 || amount > 100000 || !/^[A-Za-z0-9-]{12,80}$/.test(requestId)) {
-        return error('Enter different valid wallet emails, an amount up to R100,000 and a unique request reference.', 400);
+      if (!validEmail(senderEmail) || !validEmail(recipientEmail) || senderEmail === recipientEmail || !Number.isFinite(amount) || amount <= 0 || amount > 100000 || !['ZAR', 'RLUSD'].includes(currency) || !/^[A-Za-z0-9-]{12,80}$/.test(requestId)) {
+        return error('Enter different valid wallet emails, a valid ZAR or RLUSD amount up to 100,000 and a unique request reference.', 400);
       }
       const receiptId = 'xfer-' + requestId;
       const senderId = 'wallet-' + encodeURIComponent(senderEmail);
@@ -720,7 +779,7 @@ export const handler = router({
         await db.list('spaza_wallet_transfer_receipts', { limit: 1 });
         const [prior] = await db.get<Record<string, any>>('spaza_wallet_transfer_receipts', [receiptId], { consistent: true });
         if (prior) {
-          if (prior.senderEmail !== senderEmail || prior.recipientEmail !== recipientEmail || Number(prior.amount) !== value) return error('This request reference belongs to a different transfer.', 409);
+          if (prior.senderEmail !== senderEmail || prior.recipientEmail !== recipientEmail || Number(prior.amount) !== value || String(prior.currency || 'ZAR') !== currency) return error('This request reference belongs to a different transfer.', 409);
           return json({ status: 'Completed (Demo)', reference: receiptId, replayed: true, message: 'This demo transfer was already completed.' });
         }
         const [sender] = await db.get<Record<string, any>>('spaza_wallet_accounts', [senderId], { consistent: true });
@@ -732,6 +791,28 @@ export const handler = router({
           if (!createdId && !recipient) return error('Recipient wallet could not be created.', 503);
         }
         if (!recipient) return error('Recipient wallet could not be loaded.', 503);
+        if (currency === 'RLUSD') {
+          const { shop } = await ensureRlusdDemoAccounts();
+          const { rates, timestamp } = await getFxRates();
+          const zarPerRlusd = Number(rates.ZAR);
+          if (!Number.isFinite(zarPerRlusd) || zarPerRlusd <= 0) return error('A current RLUSD/ZAR exchange rate is unavailable. No transfer was recorded.', 503);
+          const receivedZar = Number((value * zarPerRlusd).toFixed(2));
+          if (receivedZar <= 0) return error('The converted ZAR amount is too small to transfer.', 400);
+          const shopBalance = Number(shop.balance || 0);
+          if (shopBalance < value) return error('The Store RLUSD demo balance is insufficient.', 409);
+          const now = new Date().toISOString();
+          const reference = 'DEMO-RLUSD-TRF-' + requestId;
+          const senderUpdate = db.tx.update('spaza_rlusd_demo_wallets', [{ id: 'shop', record: { ...shop, balance: Number((shopBalance - value).toFixed(2)), updatedAt: now }, if: { balance: shop.balance || 0 } }]);
+          const recipientUpdate = db.tx.update('spaza_wallet_accounts', [{ id: recipientId, record: { ...recipient, balance: Number((Number(recipient.balance || 0) + receivedZar).toFixed(2)), currency: 'ZAR', updatedAt: now }, if: { balance: Number(recipient.balance || 0) } }]);
+          const activity = db.tx.add('spaza_wallet_transactions', [
+            { id: reference + '-OUT', email: senderEmail, type: 'transfer', flow: 'sent', amount: value, currency: 'RLUSD', status: 'Completed (Demo)', method: 'Internal RLUSD demo ledger', recipient: recipientEmail, reference, fxRate: zarPerRlusd, fxTimestamp: timestamp, receivedAmount: receivedZar, receivedCurrency: 'ZAR', createdAt: now },
+            { id: reference + '-IN', email: recipientEmail, type: 'transfer', flow: 'received', amount: receivedZar, currency: 'ZAR', status: 'Completed (Demo)', method: 'RLUSD converted to ZAR at indicative FX rate', sender: senderEmail, reference, sourceAmount: value, sourceCurrency: 'RLUSD', fxRate: zarPerRlusd, fxTimestamp: timestamp, createdAt: now },
+          ]);
+          const receipt = db.tx.add('spaza_wallet_transfer_receipts', [{ id: receiptId, senderEmail, recipientEmail, amount: value, currency: 'RLUSD', receivedAmount: receivedZar, receivedCurrency: 'ZAR', fxRate: zarPerRlusd, fxTimestamp: timestamp, reference, status: 'Completed (Demo)', createdAt: now }]);
+          const [senderSaved, recipientSaved, [outId, inId], [receiptSaved]] = await db.transact([senderUpdate, recipientUpdate, activity, receipt]);
+          if (!senderSaved || !recipientSaved || !outId || !inId || !receiptSaved) return error('Transfer was not committed. Reload both wallets and check the activity feed.', 409);
+          return json({ status: 'Completed (Demo)', reference, sentAmount: value, sentCurrency: 'RLUSD', receivedAmount: receivedZar, receivedCurrency: 'ZAR', fxRate: zarPerRlusd, fxTimestamp: timestamp, message: `Demo transfer sent ${value.toFixed(2)} RLUSD. The recipient received R${receivedZar.toFixed(2)} ZAR using an indicative rate of R${zarPerRlusd.toFixed(4)} per RLUSD. The Store RLUSD demo balance was debited; no bank or blockchain funds moved.` }, 201);
+        }
         if (Number(sender.balance || 0) < value) return error('Insufficient ZAR demo balance.', 409);
         const now = new Date().toISOString();
         const reference = 'DEMO-TRF-' + requestId;
@@ -758,14 +839,14 @@ export const handler = router({
       const senderAddress = String(input.senderAddress || '').trim();
       const destinationAddress = String(input.destinationAddress || '').trim();
       const txHash = String(input.txHash || '').trim().toUpperCase();
-      const network = String(input.network || 'testnet');
+      const network = 'testnet';
       const direction = String(input.direction || 'deposit');
       const validAddress = /^r[1-9A-HJ-NP-Za-km-z]{24,34}$/;
-      if (!isValidEmail(email) || !validAddress.test(senderAddress) || !validAddress.test(destinationAddress) || senderAddress === destinationAddress || !/^[A-F0-9]{64}$/.test(txHash) || !['mainnet', 'testnet'].includes(network) || !['deposit', 'withdrawal'].includes(direction)) {
-        return error('Enter a valid wallet email, sender and recipient addresses, transaction hash, network and direction.', 400);
+      if (!isValidEmail(email) || !validAddress.test(senderAddress) || !validAddress.test(destinationAddress) || senderAddress === destinationAddress || !/^[A-F0-9]{64}$/.test(txHash) || !['deposit', 'withdrawal'].includes(direction)) {
+        return error('Enter valid wallet details and a Testnet transaction hash.', 400);
       }
       try {
-        const txResult = await xrplRequest('tx', { transaction: txHash, binary: false }, network as 'mainnet' | 'testnet');
+        const txResult = await xrplRequest('tx', { transaction: txHash, binary: false }, 'testnet');
         const tx = txResult as Record<string, any>;
         const meta = (tx.meta || tx.metaData || {}) as Record<string, any>;
         const drops = typeof tx.Amount === 'string' ? Number(tx.Amount) : NaN;
@@ -781,6 +862,23 @@ export const handler = router({
         return json({ status: 'Confirmed on XRPL ' + (network === 'mainnet' ? 'Mainnet' : 'Testnet'), amount: amountXrp, currency: 'XRP', senderAddress, destinationAddress, txHash, reference, balanceCredited: false, message: 'The validated XRP transfer was recorded. SmartSpaza has not credited an app balance or signed a payment.' }, 201);
       } catch (err) {
         return error(err instanceof Error ? err.message : 'XRPL transaction verification failed.', 422);
+      }
+    },
+  ],
+  'GET /api/fx/rlusd-zar-quote': [
+    async ({ query }) => {
+      const rlusdAmount = Number(query?.rlusdAmount || 0);
+      if (!Number.isFinite(rlusdAmount) || rlusdAmount <= 0 || rlusdAmount > 100000) {
+        return error('Enter a valid RLUSD amount up to 100,000.', 400);
+      }
+      try {
+        const { rates, timestamp } = await getFxRates();
+        const zarPerRlusd = Number(rates.ZAR);
+        if (!Number.isFinite(zarPerRlusd) || zarPerRlusd <= 0) return error('A valid ZAR exchange rate is unavailable.', 503);
+        const zarAmount = Number((rlusdAmount * zarPerRlusd).toFixed(2));
+        return json({ quote: { rlusdAmount: Number(rlusdAmount.toFixed(2)), zarAmount, zarPerRlusd, timestamp, sourceCurrency: 'RLUSD', destinationCurrency: 'ZAR', quoteType: 'Indicative demo conversion; RLUSD is assumed to track USD 1:1. Provider spreads and fees are not included.' } });
+      } catch (err) {
+        return error(err instanceof Error ? err.message : 'Current RLUSD/ZAR quote unavailable.', 503);
       }
     },
   ],
@@ -1291,12 +1389,8 @@ export const handler = router({
         const [item] = await db.get<Product>(INVENTORY, [params.id], { consistent: true });
         if (!item) return error('Inventory item was not found.', 404);
         if (quantity > item.stock) return error('Disposal quantity exceeds available stock.', 409);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const expiryDate = new Date(item.expiry + 'T00:00:00');
-        const daysRemaining = Math.floor((expiryDate.getTime() - today.getTime()) / 86400000);
-        if (daysRemaining < 0 || daysRemaining > 7 || Number(item.stock) <= 0) {
-          return error('Disposal action is available only for in-stock products expiring within the next seven days.', 403);
+        if (Number(item.stock) <= 0) {
+          return error('There is no remaining stock to dispose of.', 409);
         }
         await db.list(DISPOSALS, { limit: 1 });
         const update = db.tx.update(INVENTORY, [{
@@ -1309,6 +1403,8 @@ export const handler = router({
           productName: item.name,
           quantity,
           reason,
+          expiry: item.expiry,
+          expiredAtDisposal: item.expiry <= southAfricaDate(),
           date: new Date().toISOString(),
         }]);
         const [updated, [logId]] = await db.transact([update, log]);
@@ -1460,60 +1556,171 @@ export const handler = router({
       }
       const normalizedContact = emailContact ? recipient.toLowerCase() : '+' + phoneDigits;
       const shopId = 'shop';
-      const recipientId = 'recipient-' + encodeURIComponent(normalizedContact);
       const receiptId = 'rlusd-demo-' + requestId;
       const value = Number(amount.toFixed(2));
       try {
         const [prior] = await db.get<Record<string, any>>('spaza_rlusd_demo_receipts', [receiptId], { consistent: true });
-        if (prior) return json({ status: 'Completed (Demo)', reference: receiptId, replayed: true, message: 'This RLUSD demo payment was already completed.' });
-        await ensureRlusdDemoAccounts();
-        let [shop] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', [shopId], { consistent: true });
-        let [receiver] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', [recipientId], { consistent: true });
-        if (!receiver) {
-          await db.tx.add('spaza_rlusd_demo_wallets', [{ id: recipientId, label: recipient, country, balance: 0, currency: 'RLUSD', createdAt: new Date().toISOString() }]);
-          [receiver] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', [recipientId], { consistent: true });
+        if (prior) {
+          if (prior.normalizedContact !== normalizedContact || prior.country !== country || Number(prior.amount) !== value) {
+            return error('This request reference belongs to a different payment.', 409);
+          }
+          return json({
+            status: prior.status,
+            reference: prior.reference,
+            replayed: true,
+            sentAmount: prior.amount,
+            sentCurrency: 'RLUSD',
+            receivedAmount: prior.localAmount,
+            receivedCurrency: prior.localCurrency,
+            fxRate: prior.fxRate,
+            fxTimestamp: prior.fxTimestamp,
+            message: `This payment was already completed. The recipient received ${Number(prior.localAmount).toFixed(2)} ${prior.localCurrency}; no second credit was made.`,
+          });
         }
-        if (!shop || !receiver) return error('Demo RLUSD wallets could not be loaded.', 503);
+
+        const fx = await getFxRates();
+        const localCurrency = COUNTRY_CURRENCIES[country];
+        const localRate = Number(fx.rates[localCurrency]);
+        if (!Number.isFinite(localRate) || localRate <= 0) {
+          return error('A valid destination-currency exchange rate is unavailable. No payment was recorded.', 503);
+        }
+        const fractionDigits = new Intl.NumberFormat('en', {
+          style: 'currency',
+          currency: localCurrency,
+        }).resolvedOptions().maximumFractionDigits;
+        const localAmount = Number((value * localRate).toFixed(fractionDigits));
+        if (!Number.isFinite(localAmount) || localAmount <= 0) {
+          return error('The converted destination-currency amount is too small to transfer.', 400);
+        }
+
+        await ensureRlusdDemoAccounts();
+        const [shop] = await db.get<Record<string, any>>('spaza_rlusd_demo_wallets', [shopId], { consistent: true });
+        const recipientId = 'recipient-' + encodeURIComponent(normalizedContact + ':' + localCurrency);
+        let [receiver] = await db.get<Record<string, any>>('spaza_local_demo_wallets', [recipientId], { consistent: true });
+        if (!receiver) {
+          await db.tx.add('spaza_local_demo_wallets', [{
+            id: recipientId,
+            label: recipient,
+            recipient: normalizedContact,
+            country,
+            balance: 0,
+            currency: localCurrency,
+            accountType: 'recipient_local_currency_demo',
+            createdAt: new Date().toISOString(),
+          }]);
+          [receiver] = await db.get<Record<string, any>>('spaza_local_demo_wallets', [recipientId], { consistent: true });
+        }
+        if (!shop || !receiver) return error('Demo sender or recipient wallet could not be loaded.', 503);
+        if (receiver.currency !== localCurrency) return error('The recipient demo wallet currency does not match the selected destination country.', 409);
+
         const shopBalance = Number(shop.balance || 0);
         const receiverBalance = Number(receiver.balance || 0);
         if (shopBalance < value) return error('The shop demo RLUSD wallet has insufficient funds.', 409);
         const now = new Date().toISOString();
         const reference = 'RLUSD-DEMO-' + requestId;
-        let fx: any = null;
-        try {
-          const rates = await getFxRates();
-          const localCurrency = COUNTRY_CURRENCIES[country];
-          fx = { localCurrency, localAmount: Number((value * Number(rates.rates[localCurrency])).toFixed(2)), fxTimestamp: rates.timestamp };
-        } catch {
-          fx = null;
-        }
-        const senderUpdate = db.tx.update('spaza_rlusd_demo_wallets', [{ id: shopId, record: { ...shop, balance: Number((shopBalance - value).toFixed(2)), updatedAt: now }, if: { balance: shop.balance || 0 } }]);
-        const recipientUpdate = db.tx.update('spaza_rlusd_demo_wallets', [{ id: recipientId, record: { ...receiver, balance: Number((receiverBalance + value).toFixed(2)), updatedAt: now }, if: { balance: receiver.balance || 0 } }]);
+        const updatedRecipientBalance = Number((receiverBalance + localAmount).toFixed(fractionDigits));
+        const senderUpdate = db.tx.update('spaza_rlusd_demo_wallets', [{
+          id: shopId,
+          record: { ...shop, balance: Number((shopBalance - value).toFixed(2)), updatedAt: now },
+          if: { balance: shop.balance || 0 },
+        }]);
+        const recipientUpdate = db.tx.update('spaza_local_demo_wallets', [{
+          id: recipientId,
+          record: { ...receiver, balance: updatedRecipientBalance, updatedAt: now },
+          if: { balance: receiver.balance || 0 },
+        }]);
         const transfer = db.tx.add(TRANSFERS, [{
-          id: reference, recipient, country, amount: value, currency: 'RLUSD',
-          status: 'Completed (Demo)', date: isoDate(), localAmount: fx?.localAmount,
-          localCurrency: fx?.localCurrency, fxTimestamp: fx?.fxTimestamp,
-          ledgerResult: 'Internal demo settlement, no XRPL transaction submitted',
+          id: reference,
+          recipient,
+          country,
+          amount: value,
+          currency: 'RLUSD',
+          status: 'Completed (Demo)',
+          date: isoDate(),
+          localAmount,
+          localCurrency,
+          fxRate: localRate,
+          fxTimestamp: fx.timestamp,
+          recipientWalletId: recipientId,
+          ledgerResult: 'Internal demo currency conversion and settlement; no XRPL transaction submitted',
         }]);
         const receipt = db.tx.add('spaza_rlusd_demo_receipts', [{
-          id: receiptId, reference, recipient, country, amount: value, currency: 'RLUSD',
-          status: 'Completed (Demo)', createdAt: now,
+          id: receiptId,
+          reference,
+          recipient,
+          normalizedContact,
+          country,
+          amount: value,
+          currency: 'RLUSD',
+          localAmount,
+          localCurrency,
+          fxRate: localRate,
+          fxTimestamp: fx.timestamp,
+          recipientWalletId: recipientId,
+          status: 'Completed (Demo)',
+          createdAt: now,
         }]);
         const activity = db.tx.add('spaza_wallet_transactions', [
-          { id: reference + '-OUT', userLabel: 'SmartSpaza Shop', type: 'global_transfer', flow: 'sent', amount: value, currency: 'RLUSD', status: 'Completed (Demo)', method: 'Internal RLUSD demo wallet', recipient, country, reference, createdAt: now },
-          { id: reference + '-IN', userLabel: recipient, type: 'global_transfer', flow: 'received', amount: value, currency: 'RLUSD', status: 'Received (Demo)', method: 'Internal RLUSD demo wallet', sender: 'SmartSpaza Shop', country, reference, createdAt: now },
+          {
+            id: reference + '-OUT',
+            userLabel: 'SmartSpaza Shop',
+            type: 'global_transfer',
+            flow: 'sent',
+            amount: value,
+            currency: 'RLUSD',
+            receivedAmount: localAmount,
+            receivedCurrency: localCurrency,
+            fxRate: localRate,
+            fxTimestamp: fx.timestamp,
+            status: 'Completed (Demo)',
+            method: 'Internal RLUSD demo conversion',
+            recipient,
+            country,
+            reference,
+            createdAt: now,
+          },
+          {
+            id: reference + '-IN',
+            userLabel: recipient,
+            type: 'global_transfer',
+            flow: 'received',
+            amount: localAmount,
+            currency: localCurrency,
+            sourceAmount: value,
+            sourceCurrency: 'RLUSD',
+            fxRate: localRate,
+            fxTimestamp: fx.timestamp,
+            status: 'Received (Demo)',
+            method: 'RLUSD converted to destination local currency',
+            sender: 'SmartSpaza Shop',
+            country,
+            reference,
+            createdAt: now,
+          },
         ]);
-        const [shopSaved, receiverSaved, [transferId], [receiptSaved], [outId, inId]] = await db.transact([senderUpdate, recipientUpdate, transfer, receipt, activity]);
-        if (!shopSaved || !receiverSaved || !transferId || !receiptSaved || !outId || !inId) {
-          return error('The RLUSD demo payment was not committed. Check the shop and recipient balances before retrying.', 409);
+        const [shopSaved, recipientSaved, [transferId], [receiptSaved], [outId, inId]] = await db.transact([
+          senderUpdate,
+          recipientUpdate,
+          transfer,
+          receipt,
+          activity,
+        ]);
+        if (!shopSaved || !recipientSaved || !transferId || !receiptSaved || !outId || !inId) {
+          return error('The demo payment was not committed. Check the sender and recipient balances before retrying.', 409);
         }
         return json({
-          id: transferId, status: 'Completed (Demo)', reference,
-          amount: value, currency: 'RLUSD',
+          id: transferId,
+          status: 'Completed (Demo)',
+          reference,
+          sentAmount: value,
+          sentCurrency: 'RLUSD',
+          receivedAmount: localAmount,
+          receivedCurrency: localCurrency,
+          fxRate: localRate,
+          fxTimestamp: fx.timestamp,
           shopBalance: Number((shopBalance - value).toFixed(2)),
-          recipientBalance: Number((receiverBalance + value).toFixed(2)),
-          localAmount: fx?.localAmount, localCurrency: fx?.localCurrency,
-          message: 'RLUSD demo payment completed immediately. The shop demo balance was debited and the recipient demo balance was credited. No XRPL, bank or real funds moved.',
+          recipientBalance: updatedRecipientBalance,
+          message: `Sent ${value.toFixed(2)} RLUSD. The recipient demo wallet was credited with ${localAmount.toFixed(fractionDigits)} ${localCurrency} using an indicative rate of ${localRate.toFixed(6)} ${localCurrency} per RLUSD. This is a demo conversion; no XRPL, bank or real funds moved.`,
         }, 201);
       } catch (err) {
         console.error('RLUSD demo transfer failed', err);
